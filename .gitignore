@@ -410,3 +410,13 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Local secrets (WiFi / Home Assistant credentials) — never commit
+include/secrets.h
+
+# PlatformIO / VSCode machine-generated files (keep extensions.json)
+.pio
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/.browse.c_cpp.db*
+.vscode/ipch
