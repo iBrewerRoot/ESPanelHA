@@ -30,6 +30,10 @@ struct ConfigPortalCallbacks {
 
 void configPortalBegin(const ConfigPortalCallbacks &cb);
 
+/** Call frequently from the main loop. Handles the deferred reboot that follows
+ *  a successful firmware upload (so the HTTP response flushes first). */
+void configPortalLoop();
+
 } // namespace net
 
 #endif /* NET_CONFIG_PORTAL_H */

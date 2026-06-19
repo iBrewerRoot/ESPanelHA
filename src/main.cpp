@@ -169,6 +169,7 @@ void loop() {
     }
 
     // Running.
+    net::configPortalLoop();  // services the deferred reboot after an OTA upload
     if (g_haStarted) g_client.loop();
 
     if (g_pendingHaApply) {
