@@ -1,0 +1,14 @@
+{
+  "name": "mdi-font-gen",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Generate an LVGL font subset of Material Design Icons used by the HA control panel UI.",
+  "type": "module",
+  "scripts": {
+    "gen": "node generate.mjs"
+  },
+  "devDependencies": {
+    "@mdi/font": "^7.4.47",
+    "lv_font_conv": "^1.5.3"
+  }
+}

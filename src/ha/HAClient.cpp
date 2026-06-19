@@ -20,6 +20,19 @@ bool parseState(JsonObjectConst obj, EntityState &out) {
                            ? attrs["friendly_name"].as<const char *>()
                            : out.entityId;
     out.brightness = attrs["brightness"].is<int>() ? attrs["brightness"].as<int>() : -1;
+
+    // Presentation attributes — let the UI mirror HA's own icon/color/unit.
+    if (attrs["icon"].is<const char *>()) out.icon = attrs["icon"].as<const char *>();
+    if (attrs["unit_of_measurement"].is<const char *>())
+        out.unit = attrs["unit_of_measurement"].as<const char *>();
+    if (attrs["device_class"].is<const char *>())
+        out.deviceClass = attrs["device_class"].as<const char *>();
+
+    // rgb_color: [r, g, b] when a color light is on — packed into 0xRRGGBB.
+    JsonArrayConst rgb = attrs["rgb_color"];
+    if (rgb.size() == 3) {
+        out.rgb = (rgb[0].as<int>() << 16) | (rgb[1].as<int>() << 8) | rgb[2].as<int>();
+    }
     return true;
 }
 

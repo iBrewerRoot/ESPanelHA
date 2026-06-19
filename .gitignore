@@ -420,3 +420,6 @@ include/secrets.h
 .vscode/launch.json
 .vscode/.browse.c_cpp.db*
 .vscode/ipch
+
+# Node deps (MDI font generator in scripts/mdi-font)
+node_modules/

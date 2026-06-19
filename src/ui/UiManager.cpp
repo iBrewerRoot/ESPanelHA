@@ -1,5 +1,7 @@
 #include "UiManager.h"
 
+#include "mdi_icons.h"
+
 #include <lvgl.h>
 #include <map>
 
@@ -23,11 +25,22 @@ lv_obj_t *infoUrlLabel = nullptr;
 lv_obj_t *dashGrid = nullptr;
 lv_obj_t *connLabel = nullptr;
 
-/* Widgets for one dashboard card, keyed by entity id. */
+/* Palette — kept close to Home Assistant's own tile-card look. */
+constexpr uint32_t kScreenBg   = 0x101418;
+constexpr uint32_t kTileBg     = 0x1b2128;  // tile, inactive
+constexpr uint32_t kIconOff    = 0x5b6571;  // muted icon when off / idle
+constexpr uint32_t kAmber      = 0xFFC107;  // lights on (no color info)
+constexpr uint32_t kPrimary    = 0x03A9F4;  // HA primary blue (switches, sensors)
+constexpr uint32_t kTextMuted  = 0x8aa0b2;
+
+/* Widgets for one dashboard tile, keyed by entity id. */
 struct Card {
-    lv_obj_t *sw = nullptr;      // on/off toggle
+    lv_obj_t *tile = nullptr;
+    lv_obj_t *icon = nullptr;    // MDI glyph, recolored with state
+    lv_obj_t *stateLbl = nullptr;
     lv_obj_t *slider = nullptr;  // brightness (lights only), may be null
     String *idHolder = nullptr;  // heap-owned id passed as widget user_data
+    String domain;
 };
 std::map<String, Card> cards;
 
@@ -36,11 +49,89 @@ bool suppressEvents = false;
 
 lv_obj_t *makeScreen() {
     lv_obj_t *s = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(s, lv_color_hex(0x101418), 0);
+    lv_obj_set_style_bg_color(s, lv_color_hex(kScreenBg), 0);
     return s;
 }
 
-void onSwitchEvent(lv_event_t *e) {
+// "Active" in the HA sense — drives the accent coloring of the tile.
+bool isActive(const ha::EntityState &e) {
+    return e.state == "on" || e.state == "open" || e.state == "home" ||
+           e.state == "playing" || e.state == "unlocked";
+}
+
+// Icon glyph: prefer HA's own attributes.icon, then a domain/device-class
+// default, so a tile always shows something meaningful.
+const char *resolveGlyph(const String &domain, const ha::EntityState *st) {
+    if (st && st->icon.length()) {
+        if (const char *g = mdiGlyph(st->icon.c_str())) return g;
+    }
+    if (domain == "light") return MDI_LIGHTBULB;
+    if (domain == "switch") return MDI_POWER_SOCKET_EU;
+    if (domain == "sensor") {
+        const String dc = st ? st->deviceClass : String();
+        if (dc == "temperature") return MDI_THERMOMETER;
+        if (dc == "humidity") return MDI_WATER_PERCENT;
+        if (dc == "power" || dc == "energy") return MDI_LIGHTNING_BOLT;
+        return MDI_GAUGE;
+    }
+    return MDI_HELP_CIRCLE_OUTLINE;
+}
+
+// Accent color for the current state — mirrors the bulb's real RGB when known.
+lv_color_t accentFor(const String &domain, const ha::EntityState &e, bool active) {
+    if (domain == "sensor") return lv_color_hex(kPrimary);  // sensors: always lit
+    if (!active) return lv_color_hex(kIconOff);
+    if (domain == "light") {
+        return e.rgb >= 0 ? lv_color_hex((uint32_t)e.rgb) : lv_color_hex(kAmber);
+    }
+    return lv_color_hex(kPrimary);
+}
+
+int brightnessPct(const ha::EntityState &e, bool active) {
+    if (e.brightness >= 0) return (e.brightness * 100 + 127) / 255;
+    return active ? 100 : 0;
+}
+
+// Human-readable state line, HA-style ("On · 60%", "21.5 °C").
+String stateText(const String &domain, const ha::EntityState &e, bool active) {
+    if (domain == "light") {
+        if (!active) return "Off";
+        String s = "On";
+        if (e.brightness >= 0) { s += " \xC2\xB7 "; s += brightnessPct(e, true); s += "%"; }
+        return s;
+    }
+    if (domain == "switch") return active ? "On" : "Off";
+    if (domain == "sensor") {
+        String s = e.state;
+        if (e.unit.length()) { s += " "; s += e.unit; }
+        return s;
+    }
+    return e.state;
+}
+
+// Repaint a tile from an entity state (icon glyph + accent + tint + text + slider).
+void applyVisual(Card &card, const ha::EntityState &e) {
+    const bool active = isActive(e);
+    const lv_color_t accent = accentFor(card.domain, e, active);
+    const lv_color_t tileBg =
+        active ? lv_color_mix(accent, lv_color_hex(kTileBg), 60) : lv_color_hex(kTileBg);
+
+    lv_label_set_text(card.icon, resolveGlyph(card.domain, &e));
+    lv_obj_set_style_text_color(card.icon, accent, 0);
+    lv_obj_set_style_bg_color(card.tile, tileBg, 0);
+
+    if (card.stateLbl) lv_label_set_text(card.stateLbl, stateText(card.domain, e, active).c_str());
+
+    if (card.slider) {
+        suppressEvents = true;
+        lv_slider_set_value(card.slider, brightnessPct(e, active), LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(card.slider, accent, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(card.slider, accent, LV_PART_KNOB);
+        suppressEvents = false;
+    }
+}
+
+void onTileEvent(lv_event_t *e) {
     if (suppressEvents) return;
     auto *id = static_cast<String *>(lv_event_get_user_data(e));
     if (id && actions.onToggle) actions.onToggle(*id);
@@ -58,42 +149,55 @@ void onSliderEvent(lv_event_t *e) {
 void buildCard(const core::SelectedEntity &sel, const ha::EntityState *state) {
     Card card;
     card.idHolder = new String(sel.entityId);
+    card.domain = ha::EntityStore::domainOf(sel.entityId);
 
-    lv_obj_t *cont = lv_obj_create(dashGrid);
-    lv_obj_set_size(cont, lv_pct(46), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(cont, lv_color_hex(0x1b2128), 0);
-    lv_obj_set_style_radius(cont, 14, 0);
-    lv_obj_set_style_pad_all(cont, 14, 0);
-    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(cont, 12, 0);
+    lv_obj_t *tile = lv_obj_create(dashGrid);
+    card.tile = tile;
+    lv_obj_set_size(tile, lv_pct(46), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(tile, lv_color_hex(kTileBg), 0);
+    lv_obj_set_style_radius(tile, 18, 0);
+    lv_obj_set_style_pad_all(tile, 16, 0);
+    lv_obj_set_style_border_width(tile, 0, 0);
+    lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(tile, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(tile, 8, 0);
+    // Whole tile toggles (HA tile-card behaviour); press gives visual feedback.
+    lv_obj_add_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(tile, lv_color_hex(0x232b34), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(tile, onTileEvent, LV_EVENT_CLICKED, card.idHolder);
 
-    lv_obj_t *name = lv_label_create(cont);
+    card.icon = lv_label_create(tile);
+    lv_obj_set_style_text_font(card.icon, &mdi_font, 0);
+    lv_obj_set_style_text_color(card.icon, lv_color_hex(kIconOff), 0);
+    lv_label_set_text(card.icon, resolveGlyph(card.domain, state));
+
+    lv_obj_t *name = lv_label_create(tile);
     const String label = sel.label.length() ? sel.label
                          : (state ? state->friendlyName : sel.entityId);
     lv_label_set_text(name, label.c_str());
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_obj_set_width(name, lv_pct(100));
     lv_obj_set_style_text_color(name, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(name, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(name, &lv_font_montserrat_18, 0);
 
-    card.sw = lv_switch_create(cont);
-    lv_obj_set_size(card.sw, 80, 44);  // large enough for touch on a dense panel
-    lv_obj_add_event_cb(card.sw, onSwitchEvent, LV_EVENT_VALUE_CHANGED, card.idHolder);
+    card.stateLbl = lv_label_create(tile);
+    lv_label_set_text(card.stateLbl, "");
+    lv_obj_set_style_text_color(card.stateLbl, lv_color_hex(kTextMuted), 0);
+    lv_obj_set_style_text_font(card.stateLbl, &lv_font_montserrat_14, 0);
 
-    const String domain = ha::EntityStore::domainOf(sel.entityId);
-    if (domain == "light") {
-        card.slider = lv_slider_create(cont);
+    if (card.domain == "light") {
+        card.slider = lv_slider_create(tile);
         lv_slider_set_range(card.slider, 0, 100);
         lv_obj_set_width(card.slider, lv_pct(100));
-        lv_obj_set_height(card.slider, 18);
+        lv_obj_set_height(card.slider, 14);
         lv_obj_add_event_cb(card.slider, onSliderEvent, LV_EVENT_RELEASED, card.idHolder);
     }
 
     cards[sel.entityId] = card;
 
-    if (state) uiUpdateEntity(*state);
+    if (state) applyVisual(cards[sel.entityId], *state);
 }
 
 void clearDashboard() {
@@ -232,18 +336,7 @@ void uiShowDashboard(const std::vector<core::SelectedEntity> &entities,
 void uiUpdateEntity(const ha::EntityState &e) {
     auto it = cards.find(e.entityId);
     if (it == cards.end()) return;
-    Card &card = it->second;
-
-    suppressEvents = true;
-    const bool on = (e.state == "on");
-    if (on) lv_obj_add_state(card.sw, LV_STATE_CHECKED);
-    else lv_obj_clear_state(card.sw, LV_STATE_CHECKED);
-
-    if (card.slider) {
-        const int pct = e.brightness >= 0 ? (e.brightness * 100 + 127) / 255 : (on ? 100 : 0);
-        lv_slider_set_value(card.slider, pct, LV_ANIM_OFF);
-    }
-    suppressEvents = false;
+    applyVisual(it->second, e);
 }
 
 void uiSetConnectionStatus(const String &text) {

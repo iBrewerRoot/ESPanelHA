@@ -1,0 +1,41 @@
+# Material Design Icons bundled into the firmware font.
+# One MDI name per line (without the "mdi:" prefix). Lines starting with # are
+# ignored. After editing, run `npm run gen` to regenerate the font + headers.
+#
+# Keep this list lean: every glyph costs flash. Add icons here as new entity
+# domains / device classes are supported, then regenerate.
+
+# --- lights ---
+lightbulb
+lightbulb-outline
+lightbulb-group
+ceiling-light
+floor-lamp
+lamp
+led-strip-variant
+string-lights
+track-light
+
+# --- switches / plugs ---
+power-socket-eu
+power-plug
+power-plug-outline
+toggle-switch-variant
+toggle-switch-variant-off
+light-switch
+power
+
+# --- sensors (phase 2, pre-bundled so the look is ready) ---
+thermometer
+water-percent
+gauge
+lightning-bolt
+flash
+weather-partly-cloudy
+motion-sensor
+door
+window-closed-variant
+
+# --- generic / fallback ---
+help-circle-outline
+alert-circle-outline

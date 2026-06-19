@@ -20,6 +20,12 @@ struct EntityState {
     String friendlyName;
     String state;         // "on" / "off" / value
     int brightness = -1;  // light only, 0..255, -1 if unknown/unsupported
+
+    // Presentation attributes mirrored from HA, so the UI looks "linked" to it.
+    String icon;          // mdi name from attributes.icon, e.g. "mdi:lightbulb" ("" if none)
+    String unit;          // sensor unit_of_measurement, e.g. "°C" ("" if none)
+    String deviceClass;   // attributes.device_class, e.g. "temperature" ("" if none)
+    int32_t rgb = -1;     // light color packed 0xRRGGBB, -1 if unknown/unsupported
 };
 
 class EntityStore {
