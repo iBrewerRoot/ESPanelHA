@@ -134,6 +134,20 @@ void wifiLoop() {
 #endif
 }
 
+void wifiStopPortal() {
+#if !defined(WIFI_SSID)
+    // WiFiManager closes its own portal on connect (non-blocking, default
+    // _disableConfigPortal). Only re-enter its shutdown if one is still active —
+    // calling it once the server has been freed dereferences a null pointer and
+    // crashes (WiFiManager.cpp:970).
+    if (wm.getConfigPortalActive()) wm.stopConfigPortal();
+    if (wm.getWebPortalActive()) wm.stopWebPortal();
+    // Give lwIP time to release the portal's :80 listening socket before our
+    // AsyncWebServer binds it; otherwise AsyncTCP returns "bind error: -8".
+    delay(400);
+#endif
+}
+
 bool wifiConnected() { return WiFi.status() == WL_CONNECTED; }
 
 } // namespace net

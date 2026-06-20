@@ -1,9 +1,11 @@
 /**
- * Entity-selection web portal (runs in station mode, after WiFi+HA are up).
+ * Config web app (runs in station mode, once WiFi is up).
  *
- * Serves a page listing the entities discovered from Home Assistant with a
- * checkbox each; the user picks which ones appear on the dashboard. The portal
- * is decoupled from the HA layer through the providers below.
+ * Serves a small single-page app (gzipped, embedded in flash) that talks to a
+ * JSON REST API on the device: Home Assistant settings, a multi-page dashboard
+ * layout editor, sensor/entity discovery, optional HTTP Basic auth, and OTA.
+ * The portal is decoupled from the rest of the firmware through the callbacks
+ * below; all persistence/UI work is deferred to the main loop by the callees.
  */
 #ifndef NET_CONFIG_PORTAL_H
 #define NET_CONFIG_PORTAL_H
@@ -16,22 +18,38 @@
 namespace net {
 
 struct ConfigPortalCallbacks {
-    // Current Home Assistant settings (to prefill the form).
+    // Current HA settings (to prefill; token is never sent to the browser).
     std::function<core::HAConfig()> currentHa;
-    // Called with new HA settings on save (persist + (re)connect).
+    // New HA settings on save (persist + (re)connect).
     std::function<void(core::HAConfig)> onSaveHa;
-    // All controllable entities discovered from HA (id, friendly name, domain).
-    std::function<std::vector<core::AvailableEntity>()> listAvailable;
-    // Currently selected entities (to pre-check the boxes).
-    std::function<std::vector<core::SelectedEntity>()> currentSelection;
-    // Called with the new selection on save (persist + apply to the dashboard).
-    std::function<void(std::vector<core::SelectedEntity>)> onSave;
+    // Whole selectable-entity catalog as a JSON array string [{id,name,domain}].
+    std::function<String()> entitiesCatalogJson;
+    // Current dashboard layout (to populate the editor).
+    std::function<core::Layout()> currentLayout;
+    // New layout on save (persist + rebuild the on-screen dashboard).
+    std::function<void(core::Layout)> onSaveLayout;
+    // New auth settings; empty password means "keep the stored hash".
+    std::function<void(bool enabled, String user, String password)> onSaveAuth;
+    // Factory reset (wipe NVS + layout).
+    std::function<void()> onFactoryReset;
 };
 
-void configPortalBegin(const ConfigPortalCallbacks &cb);
+/** Cached auth state used by the (synchronous) request guard, so handlers never
+ *  touch NVS. Refreshed at boot and after every auth change. */
+struct PortalAuth {
+    bool enabled = false;
+    String user;
+    String salt;  // hex
+    String hash;  // hex, SHA-256(salt || password)
+};
+
+void configPortalBegin(const ConfigPortalCallbacks &cb, const PortalAuth &auth);
+
+/** Update the cached auth used by the request guard (call after a save). */
+void configPortalSetAuth(const PortalAuth &auth);
 
 /** Call frequently from the main loop. Handles the deferred reboot that follows
- *  a successful firmware upload (so the HTTP response flushes first). */
+ *  a firmware upload or a factory reset (so the HTTP response flushes first). */
 void configPortalLoop();
 
 } // namespace net

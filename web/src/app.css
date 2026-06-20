@@ -1,0 +1,168 @@
+/* Home Assistant-inspired dark theme. Token-driven (palette + spacing + radii)
+   so the look stays consistent — vanilla CSS, no build step (fits the device). */
+:root {
+  --bg: #111418;
+  --surface: #1c2127;
+  --surface-2: #232a31;
+  --surface-3: #2b333c;
+  --primary: #03a9f4;     /* HA primary blue */
+  --primary-ink: #ffffff;
+  --text: #e3e8ec;
+  --muted: #8aa0b2;
+  --border: #2c343d;
+  --danger: #f44336;
+  --ok: #4caf50;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --gap: 14px;
+  --bar-h: 56px;
+  font-family: Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); }
+
+/* App bar */
+.appbar {
+  position: sticky; top: 0; z-index: 10;
+  height: var(--bar-h);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px;
+  background: linear-gradient(180deg, #1a222b, #161b21);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; }
+.logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: radial-gradient(circle at 30% 30%, var(--primary), #0277bd);
+  box-shadow: 0 0 0 3px rgba(3,169,244,.15);
+}
+.tabs { display: flex; gap: 6px; }
+.tab {
+  background: transparent; color: var(--muted);
+  border: 0; padding: 8px 14px; border-radius: 999px;
+  font-size: 14px; cursor: pointer;
+}
+.tab.active { background: var(--surface-2); color: var(--text); }
+
+/* Layout */
+main { padding: 16px; max-width: 1000px; margin: 0 auto; }
+.empty { color: var(--muted); text-align: center; padding: 40px 0; }
+.row { display: flex; gap: var(--gap); flex-wrap: wrap; }
+.col { flex: 1 1 320px; min-width: 0; }
+
+/* Cards / sections */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: var(--gap);
+}
+.card h2 { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
+.card .hint { color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
+
+/* Forms */
+label.field { display: block; margin: 10px 0; }
+label.field > span { display: block; color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+input[type=text], input[type=password], input[type=number] {
+  width: 100%; padding: 11px 12px;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 15px;
+}
+input:focus { outline: none; border-color: var(--primary); }
+.switch { display: flex; align-items: center; gap: 10px; margin: 12px 0; cursor: pointer; }
+.switch input { width: 20px; height: 20px; accent-color: var(--primary); }
+
+button.btn {
+  border: 0; border-radius: var(--radius-sm);
+  background: var(--primary); color: var(--primary-ink);
+  padding: 12px 18px; font-size: 15px; cursor: pointer;
+}
+button.btn.ghost { background: var(--surface-3); color: var(--text); }
+button.btn.danger { background: var(--danger); }
+button.btn:disabled { opacity: .5; cursor: default; }
+.actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+a { color: var(--primary); }
+
+/* Page tabs (dashboard editor) */
+.pagetabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.pagetab {
+  background: var(--surface-2); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 7px 14px; font-size: 14px; cursor: pointer;
+}
+.pagetab.active { color: var(--text); border-color: var(--primary); }
+.pagetab.add { color: var(--primary); }
+
+/* Tile grid editor — mirrors the device's 2-column screen */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  min-height: 120px;
+  padding: 4px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+.grid.drop { border-color: var(--primary); background: rgba(3,169,244,.06); }
+.tile {
+  position: relative;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  min-height: 84px;
+  cursor: grab;
+  user-select: none;
+}
+.tile.dragging { opacity: .4; }
+.tile .tname { font-weight: 600; font-size: 14px; padding-right: 22px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .tdom { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.tile .tsize { color: var(--muted); font-size: 11px; margin-top: 8px; }
+.tile .del {
+  position: absolute; top: 6px; right: 6px;
+  width: 22px; height: 22px; line-height: 20px; text-align: center;
+  border-radius: 6px; background: var(--surface-3); color: var(--muted);
+  border: 0; cursor: pointer; font-size: 15px;
+}
+.tile .del:hover { background: var(--danger); color: #fff; }
+/* Resize handles */
+.rs { position: absolute; background: var(--primary); opacity: .0; transition: opacity .15s; touch-action: none; }
+.tile:hover .rs { opacity: .5; }
+.rs:hover { opacity: 1 !important; }
+.rs-w { right: -2px; top: 30%; width: 8px; height: 40%; border-radius: 4px; cursor: ew-resize; }
+.rs-h { bottom: -2px; left: 30%; height: 8px; width: 40%; border-radius: 4px; cursor: ns-resize; }
+
+/* Entity palette */
+.palette .search { margin-bottom: 10px; }
+.elist { max-height: 420px; overflow: auto; }
+.eitem {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border);
+  margin-bottom: 8px; cursor: grab;
+}
+.eitem:hover { border-color: var(--primary); }
+.eitem .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.eitem .en { flex: 1; min-width: 0; }
+.eitem .en b { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eitem .en small { color: var(--muted); }
+.eitem .add { background: var(--surface-3); border: 0; color: var(--primary);
+  border-radius: 8px; width: 28px; height: 28px; cursor: pointer; font-size: 18px; }
+.dot.light { background: #ffc107; }
+.dot.switch { background: var(--primary); }
+.dot.sensor { background: #9c27b0; }
+
+/* Toast */
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+  background: var(--surface-3); color: var(--text);
+  padding: 12px 18px; border-radius: 999px; border: 1px solid var(--border);
+  opacity: 0; pointer-events: none; transition: all .25s; font-size: 14px;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.err { background: var(--danger); color: #fff; }

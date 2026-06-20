@@ -20,6 +20,7 @@
 #include "ha/EntityStore.h"
 #include "ha/HAClient.h"
 #include "net/ConfigPortal.h"
+#include "net/Secure.h"
 #include "net/Storage.h"
 #include "net/WifiProvisioning.h"
 #include "ui/UiManager.h"
@@ -34,15 +35,23 @@ core::AppConfig g_cfg;
 ha::EntityStore g_store;
 ha::HAClient g_client;
 
-// Controllable domains in scope for the MVP (sensors come in phase 2).
-const std::vector<String> kControllableDomains = {"light", "switch"};
+// Domains offered for selection in the portal and kept in the EntityStore.
+// light/switch are controllable; sensor is display-only (handled in the UI).
+const std::vector<String> kSelectableDomains = {"light", "switch", "sensor"};
 
 // Set from the (async) web-portal save callbacks, applied in loop() so all LVGL
 // and filesystem work stays on the main thread.
-volatile bool g_pendingSelectionApply = false;
-std::vector<core::SelectedEntity> g_pendingSelection;
+volatile bool g_pendingLayoutApply = false;
+core::Layout g_pendingLayout;
 volatile bool g_pendingHaApply = false;
 core::HAConfig g_pendingHa;
+volatile bool g_pendingAuthApply = false;
+struct PendingAuth {
+    bool enabled = false;
+    String user;
+    String password;  // empty -> keep the stored hash
+};
+PendingAuth g_pendingAuth;
 
 bool g_haStarted = false; // true once the HA WebSocket client has been begun
 
@@ -63,7 +72,16 @@ const char *statusText(ha::HAStatus s) {
 }
 
 void rebuildDashboard() {
-    ui::uiShowDashboard(g_cfg.entities, g_store);
+    ui::uiShowDashboard(g_cfg.layout, g_store);
+}
+
+// Entity ids referenced by the layout — the only ones we keep full state for.
+std::vector<String> layoutEntityIds(const core::Layout &layout) {
+    std::vector<String> ids;
+    for (const auto &p : layout.pages) {
+        for (const auto &t : p.tiles) ids.push_back(t.entityId);
+    }
+    return ids;
 }
 
 // Start (or restart) the HA WebSocket client with the current config.
@@ -71,8 +89,9 @@ void startHomeAssistant() {
     if (!g_haStarted) {
         // Store only what the UI uses — HA's full state dump is ~200 KB and would
         // otherwise exhaust the heap (and starve TLS) on the initial REST fetch.
-        g_store.setDomainFilter(kControllableDomains);
+        g_store.setDomainFilter(kSelectableDomains);
         g_store.onChange([](const ha::EntityState &e) { ui::uiUpdateEntity(e); });
+        // (interest set below, before each begin)
         g_client.onStatus([](ha::HAStatus s) {
             ui::uiSetConnectionStatus(statusText(s));
             if (s == ha::HAStatus::Ready) rebuildDashboard();
@@ -84,6 +103,9 @@ void startHomeAssistant() {
         };
         ui::uiSetActions(actions);
     }
+    // Keep full state only for the entities the dashboard shows (bounds heap on
+    // large HA instances); everything selectable still lands in the catalog.
+    g_store.setInterest(layoutEntityIds(g_cfg.layout));
     g_client.begin(g_cfg.ha, &g_store);
     g_haStarted = true;
 }
@@ -95,13 +117,23 @@ void startConfigPortal() {
         g_pendingHa = ha;       // applied on the main loop
         g_pendingHaApply = true;
     };
-    cb.listAvailable = []() { return g_store.listByDomain(kControllableDomains); };
-    cb.currentSelection = []() { return g_cfg.entities; };
-    cb.onSave = [](std::vector<core::SelectedEntity> sel) {
-        g_pendingSelection = std::move(sel);
-        g_pendingSelectionApply = true;
+    // Whole selectable-entity catalog as one JSON blob; the web editor caches it
+    // and filters client-side (no per-keystroke device work, no big RAM list).
+    cb.entitiesCatalogJson = []() { return g_store.catalogJson(); };
+    cb.currentLayout = []() { return g_cfg.layout; };
+    cb.onSaveLayout = [](core::Layout layout) {
+        g_pendingLayout = std::move(layout);
+        g_pendingLayoutApply = true;
     };
-    net::configPortalBegin(cb);
+    cb.onSaveAuth = [](bool enabled, String user, String password) {
+        g_pendingAuth = {enabled, std::move(user), std::move(password)};
+        g_pendingAuthApply = true;
+    };
+    cb.onFactoryReset = []() { net::clearAll(); };  // portal arms the reboot
+
+    net::PortalAuth pa{g_cfg.auth.enabled, g_cfg.auth.user, g_cfg.auth.salt,
+                       g_cfg.auth.hash};
+    net::configPortalBegin(cb, pa);
 }
 
 } // namespace
@@ -141,7 +173,7 @@ void setup() {
 void refreshScreen(const String &ip) {
     if (!g_cfg.ha.isComplete()) {
         ui::uiShowConfigureHa(ip);          // need HA host/token
-    } else if (g_cfg.entities.empty()) {
+    } else if (g_cfg.layout.empty()) {
         ui::uiShowConnected(ip);            // need to pick entities
     } else {
         rebuildDashboard();                 // ready
@@ -153,6 +185,7 @@ void onWifiConnected() {
     Serial.printf("[wifi] connected, device IP: %s  (portal: http://%s/)\n",
                   ip.c_str(), ip.c_str());
 
+    net::wifiStopPortal();                  // free :80 from the WiFiManager portal
     startConfigPortal();                    // web config always reachable now
     if (g_cfg.ha.isComplete()) startHomeAssistant();
     refreshScreen(ip);
@@ -183,11 +216,30 @@ void loop() {
         refreshScreen(WiFi.localIP().toString());
     }
 
-    if (g_pendingSelectionApply) {
-        g_pendingSelectionApply = false;
-        g_cfg.entities = g_pendingSelection;
-        net::saveEntities(g_cfg.entities);
-        rebuildDashboard();
+    if (g_pendingLayoutApply) {
+        g_pendingLayoutApply = false;
+        g_cfg.layout = g_pendingLayout;
+        net::saveLayout(g_cfg.layout);
+        // Re-snapshot so newly added tiles get their full state (updates the
+        // interest set + repopulates over a single TLS session).
+        if (g_haStarted && g_cfg.ha.isComplete()) startHomeAssistant();
+        refreshScreen(WiFi.localIP().toString());
+    }
+
+    if (g_pendingAuthApply) {
+        g_pendingAuthApply = false;
+        core::AuthConfig a = g_cfg.auth;
+        a.user = g_pendingAuth.user;
+        if (g_pendingAuth.password.length()) {  // rehash only when a new one is set
+            a.salt = net::randomHex(16);
+            a.hash = net::sha256Hex(a.salt, g_pendingAuth.password);
+        }
+        // Can't enable auth without a username and a stored hash.
+        const bool haveCreds = a.user.length() > 0 && a.hash.length() > 0;
+        a.enabled = g_pendingAuth.enabled && haveCreds;
+        g_cfg.auth = a;
+        net::saveAuth(a);
+        net::configPortalSetAuth({a.enabled, a.user, a.salt, a.hash});
     }
 
     delay(2); // yield to WiFi / async-TCP tasks and feed the watchdog

@@ -1,6 +1,11 @@
 #include "ConfigPortal.h"
 
+#include "Secure.h"
+#include "web_assets.h"  // generated: gzipped app.html/app.css/app.js byte arrays
+
 #include <Arduino.h>
+#include <ArduinoJson.h>
+#include <AsyncJson.h>
 #include <ESPAsyncWebServer.h>
 #include <Update.h>
 
@@ -10,134 +15,183 @@ namespace {
 
 AsyncWebServer server(80);
 ConfigPortalCallbacks callbacks;
+PortalAuth g_auth;
 
-// Deferred reboot after a firmware upload — set from the OTA request handler,
-// fired from configPortalLoop() so the HTTP response flushes before we restart.
+constexpr size_t kMaxBodyBytes = 8192;   // hard cap on JSON request bodies
+
+// Deferred restart — set from a handler, fired from configPortalLoop() so the
+// HTTP response flushes before we reboot. Used by OTA and factory reset.
 bool rebootArmed = false;
 uint32_t rebootDeadline = 0;
 
-String htmlEscape(const String &in) {
-    String out;
-    out.reserve(in.length());
-    for (char c : in) {
-        switch (c) {
-            case '&': out += "&amp;"; break;
-            case '<': out += "&lt;"; break;
-            case '>': out += "&gt;"; break;
-            case '"': out += "&quot;"; break;
-            default: out += c;
-        }
-    }
-    return out;
+void armReboot(uint32_t inMs) {
+    rebootDeadline = millis() + inMs;
+    rebootArmed = true;
 }
 
-bool isSelected(const std::vector<core::SelectedEntity> &sel, const String &id) {
-    for (const auto &s : sel) {
-        if (s.entityId == id) return true;
-    }
+// ---- Auth -----------------------------------------------------------------
+
+// Verify HTTP Basic credentials against the cached salted hash. No response.
+bool authPass(AsyncWebServerRequest *req) {
+    if (!g_auth.enabled) return true;
+    if (!req->hasHeader("Authorization")) return false;
+    String header = req->getHeader("Authorization")->value();
+    if (!header.startsWith("Basic ")) return false;
+
+    String decoded;
+    if (!base64Decode(header.substring(6), decoded)) return false;
+    const int colon = decoded.indexOf(':');
+    if (colon < 0) return false;
+    const String user = decoded.substring(0, colon);
+    const String pass = decoded.substring(colon + 1);
+
+    return user == g_auth.user && sha256Hex(g_auth.salt, pass) == g_auth.hash;
+}
+
+// Verify or challenge with 401. Returns false if the request was rejected.
+bool requireAuth(AsyncWebServerRequest *req) {
+    if (authPass(req)) return true;
+    req->requestAuthentication();
     return false;
 }
 
-String renderHaForm() {
+// ---- Static assets (gzip, zero-copy from flash) ---------------------------
+
+void sendGzip(AsyncWebServerRequest *req, const char *type,
+              const uint8_t *data, size_t len) {
+    // Zero-copy from flash; the byte-array overload streams the pointer directly.
+    AsyncWebServerResponse *res = req->beginResponse(200, type, data, len);
+    res->addHeader("Content-Encoding", "gzip");
+    req->send(res);
+}
+
+// ---- JSON API: reads ------------------------------------------------------
+
+void handleGetConfig(AsyncWebServerRequest *req) {
+    if (!requireAuth(req)) return;
     core::HAConfig ha = callbacks.currentHa();
-    String f = F("<form method='POST' action='/save_ha'><h3>Home Assistant</h3>");
-    f += "<p>Host / IP</p><input name='host' value='" + htmlEscape(ha.host) + "'>";
-    f += "<p>Port</p><input name='port' value='" + String(ha.port) + "'>";
-    // The token is never echoed back (it would be readable in the page/source).
-    // Empty field on save means "keep the stored token".
-    const bool hasToken = ha.token.length() > 0;
-    f += "<p>Long-lived token</p><input name='token' type='password' autocomplete='off' placeholder='";
-    f += hasToken ? "Saved \xE2\x80\x94 leave blank to keep" : "Paste your token";
-    f += "'>";
-    if (hasToken) {
-        f += F("<p>A token is already saved. Leave this blank to keep it, or paste "
-               "a new one to replace it.</p>");
-    }
-    f += "<label class='chk'><input type='checkbox' name='tls'";
-    f += ha.useTls ? " checked" : "";
-    f += "> Use HTTPS/WSS (TLS)</label>";
-    f += F("<button type='submit'>Save Home Assistant settings</button></form>");
-    return f;
+    JsonDocument doc;
+    JsonObject h = doc["ha"].to<JsonObject>();
+    h["host"] = ha.host;
+    h["port"] = ha.port;
+    h["useTls"] = ha.useTls;
+    h["hasToken"] = ha.token.length() > 0;  // never expose the token itself
+    JsonObject a = doc["auth"].to<JsonObject>();
+    a["enabled"] = g_auth.enabled;
+    a["user"] = g_auth.user;
+
+    String out;
+    serializeJson(doc, out);
+    req->send(200, "application/json", out);
 }
 
-String renderEntities() {
-    auto available = callbacks.listAvailable();
-    auto selected = callbacks.currentSelection();
-
-    String s = F("<form method='POST' action='/save'><h3>Entities to display</h3>");
-    if (available.empty()) {
-        s += F("<p class='note'>No entities yet. Save valid Home Assistant "
-               "settings above, wait for the connection, then refresh.</p>");
-    }
-    for (const auto &e : available) {
-        const bool checked = isSelected(selected, e.entityId);
-        s += "<label class='chk'><input type='checkbox' name='e' value='";
-        s += htmlEscape(e.entityId);
-        s += "'";
-        s += checked ? " checked" : "";
-        s += "><span>";
-        s += htmlEscape(e.friendlyName.length() ? e.friendlyName : e.entityId);
-        s += "</span><span class='dom'>";
-        s += htmlEscape(e.domain);
-        s += "</span></label>";
-    }
-    s += F("<button type='submit'>Save selection</button></form>");
-    return s;
+void handleGetEntities(AsyncWebServerRequest *req) {
+    if (!requireAuth(req)) return;
+    // Pre-built catalog (one contiguous string); the browser filters it locally.
+    req->send(200, "application/json", callbacks.entitiesCatalogJson());
 }
 
-// Shared <head> + page header so every portal page looks the same.
-String commonHead() {
+void handleGetLayout(AsyncWebServerRequest *req) {
+    if (!requireAuth(req)) return;
+    core::Layout layout = callbacks.currentLayout();
+
+    JsonDocument doc;
+    doc["maxPages"] = core::kMaxPages;
+    doc["maxTilesPerPage"] = core::kMaxTilesPerPage;
+    JsonArray pages = doc["pages"].to<JsonArray>();
+    for (const auto &p : layout.pages) {
+        JsonObject po = pages.add<JsonObject>();
+        po["title"] = p.title;
+        JsonArray tiles = po["tiles"].to<JsonArray>();
+        for (const auto &t : p.tiles) {
+            JsonObject to = tiles.add<JsonObject>();
+            to["id"] = t.entityId;
+            to["label"] = t.label;
+            to["w"] = t.w;
+            to["h"] = t.h;
+        }
+    }
+
+    String out;
+    serializeJson(doc, out);
+    req->send(200, "application/json", out);
+}
+
+// ---- JSON API: writes -----------------------------------------------------
+
+void handlePostHa(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    JsonObject o = json.as<JsonObject>();
+    core::HAConfig ha = callbacks.currentHa();  // keep fields not re-sent (token)
+    if (o["host"].is<const char *>()) ha.host = o["host"].as<String>();
+    if (o["port"].is<int>()) ha.port = o["port"].as<uint16_t>();
+    if (ha.port == 0) ha.port = 8123;
+    if (o["useTls"].is<bool>()) ha.useTls = o["useTls"].as<bool>();
+    // Only overwrite the token when a non-empty one is sent.
+    if (o["token"].is<const char *>()) {
+        String tok = o["token"].as<String>();
+        tok.trim();
+        if (tok.length()) ha.token = tok;
+    }
+    callbacks.onSaveHa(ha);
+    req->send(200, "application/json", "{\"ok\":true}");
+}
+
+void handlePostLayout(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    core::Layout layout;
+    size_t pageCount = 0;
+    for (JsonObject p : json["pages"].as<JsonArray>()) {
+        if (pageCount++ >= core::kMaxPages) break;
+        core::LayoutPage page;
+        page.title = p["title"].as<String>();
+        size_t tileCount = 0;
+        for (JsonObject t : p["tiles"].as<JsonArray>()) {
+            if (tileCount++ >= core::kMaxTilesPerPage) break;
+            core::LayoutTile tile;
+            tile.entityId = t["id"].as<String>();
+            tile.label = t["label"].as<String>();
+            tile.w = t["w"] | 1;
+            tile.h = t["h"] | 1;
+            if (tile.w < 1 || tile.w > 2) tile.w = 1;
+            if (tile.h < 1 || tile.h > 2) tile.h = 1;
+            if (tile.entityId.length()) page.tiles.push_back(tile);
+        }
+        layout.pages.push_back(page);
+    }
+    callbacks.onSaveLayout(layout);
+    req->send(200, "application/json", "{\"ok\":true}");
+}
+
+void handlePostAuth(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    const bool enabled = json["enabled"] | false;
+    String user = json["user"].as<String>();
+    String password = json["password"].as<String>();  // may be empty (keep hash)
+    callbacks.onSaveAuth(enabled, user, password);
+    req->send(200, "application/json", "{\"ok\":true}");
+}
+
+// ---- OTA (kept as a tiny inline page; no JS framework needed) -------------
+
+String renderUpdatePage() {
     return F(
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>HA Panel</title><style>"
-        "body{font-family:sans-serif;margin:0;background:#111;color:#eee}"
-        "header{padding:16px;background:#1e88e5;color:#fff;font-size:18px}"
-        "h3{padding:0 16px;margin:18px 0 6px}"
-        "form{padding:0 16px 8px}"
-        "input[type=text],input[type=file],input:not([type]){width:100%;padding:10px;"
-        "margin:2px 0;box-sizing:border-box;background:#1b2128;color:#eee;"
-        "border:1px solid #333;border-radius:6px;font-size:16px}"
-        "p{margin:8px 0 2px;color:#9aa7b2;font-size:14px}"
-        ".note{color:#e0a030}"
-        "a{color:#1e88e5}"
-        "label.chk{display:flex;align-items:center;gap:10px;padding:10px;"
-        "border-bottom:1px solid #333}"
-        "label.chk input[type=checkbox]{width:22px;height:22px}"
-        ".dom{color:#888;font-size:12px;margin-left:auto}"
-        "button{margin-top:12px;padding:14px 20px;font-size:16px;border:0;"
-        "border-radius:8px;background:#1e88e5;color:#fff;width:100%}"
-        ".bar{height:14px;background:#1b2128;border:1px solid #333;border-radius:7px;"
-        "overflow:hidden;margin-top:12px}"
-        ".bar>div{height:100%;width:0;background:#1e88e5;transition:width .2s}"
-        "</style></head><body><header>HA Control Panel setup</header>");
-}
-
-String renderPage() {
-    String page = commonHead();
-    page += renderHaForm();
-    page += renderEntities();
-    page += F("<form><h3>Firmware</h3>"
-              "<p><a href='/update'>Update firmware (OTA)</a></p></form>");
-    page += F("</body></html>");
-    return page;
-}
-
-// Browser OTA page: streams the .bin to /update with a live progress bar.
-String renderUpdatePage() {
-    String page = commonHead();
-    page += F(
-        "<form id='f'><h3>Firmware update</h3>"
-        "<p>Select a firmware .bin built for this board, then upload. The panel "
-        "reboots automatically when done. Do not power off during the update.</p>"
-        "<input type='file' id='file' accept='.bin'>"
+        "<title>Firmware</title><style>body{font-family:sans-serif;background:#111;"
+        "color:#eee;margin:0;padding:16px}a{color:#03a9f4}button{padding:14px 20px;"
+        "border:0;border-radius:8px;background:#03a9f4;color:#fff;width:100%;font-size:16px}"
+        "input{width:100%;margin:8px 0;color:#eee}.bar{height:14px;background:#1b2128;"
+        "border:1px solid #333;border-radius:7px;overflow:hidden;margin-top:12px}"
+        ".bar>div{height:100%;width:0;background:#03a9f4;transition:width .2s}</style>"
+        "</head><body><h3>Firmware update</h3>"
+        "<p>Select a .bin built for this board. The panel reboots when done. Do not "
+        "power off during the update.</p>"
+        "<form id='f'><input type='file' id='file' accept='.bin'>"
         "<button type='submit'>Upload &amp; flash</button>"
-        "<div class='bar'><div id='fill'></div></div>"
-        "<p id='msg'></p>"
-        "<p><a href='/'>&larr; Back</a></p></form>"
-        "<script>"
-        "var f=document.getElementById('f');"
-        "f.onsubmit=function(e){e.preventDefault();"
+        "<div class='bar'><div id='fill'></div></div><p id='msg'></p>"
+        "<p><a href='/'>&larr; Back</a></p></form><script>"
+        "var f=document.getElementById('f');f.onsubmit=function(e){e.preventDefault();"
         "var file=document.getElementById('file').files[0];if(!file)return;"
         "var fd=new FormData();fd.append('firmware',file,file.name);"
         "var x=new XMLHttpRequest();x.open('POST','/update');"
@@ -149,56 +203,23 @@ String renderUpdatePage() {
         "x.onerror=function(){document.getElementById('msg').textContent='Upload failed';};"
         "document.getElementById('msg').textContent='Uploading...';x.send(fd);};"
         "</script></body></html>");
-    return page;
 }
 
-void handleSaveHa(AsyncWebServerRequest *req) {
-    core::HAConfig ha = callbacks.currentHa();  // preserve fields not re-entered (token)
-    if (req->hasParam("host", true)) ha.host = req->getParam("host", true)->value();
-    if (req->hasParam("port", true)) {
-        ha.port = static_cast<uint16_t>(req->getParam("port", true)->value().toInt());
-    }
-    if (ha.port == 0) ha.port = 8123;
-    // Only overwrite the token when a new one is entered; blank keeps the stored one.
-    if (req->hasParam("token", true)) {
-        String tok = req->getParam("token", true)->value();
-        tok.trim();
-        if (tok.length()) ha.token = tok;
-    }
-    ha.useTls = req->hasParam("tls", true);  // checkbox only present when checked
-    callbacks.onSaveHa(ha);
-    req->redirect("/");
-}
+bool uploadDenied = false;  // set if an OTA upload arrives without valid auth
 
-void handleSave(AsyncWebServerRequest *req) {
-    std::vector<core::SelectedEntity> selection;
-    const size_t count = req->params();
-    for (size_t i = 0; i < count; i++) {
-        const AsyncWebParameter *p = req->getParam(i);
-        if (p->isPost() && p->name() == "e") {
-            core::SelectedEntity se;
-            se.entityId = p->value();
-            se.label = "";  // label resolved from HA friendly_name on apply
-            selection.push_back(se);
-        }
-    }
-    callbacks.onSave(selection);
-    req->redirect("/");
-}
-
-// Streams an uploaded firmware image into the OTA flash partition chunk by chunk.
 void handleUpdateUpload(AsyncWebServerRequest *req, const String &filename,
                         size_t index, uint8_t *data, size_t len, bool final) {
     if (index == 0) {
+        uploadDenied = !authPass(req);  // refuse to flash without auth
+        if (uploadDenied) return;
         Serial.printf("[ota] start: %s\n", filename.c_str());
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-            Update.printError(Serial);
-        }
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
     }
+    if (uploadDenied) return;
     if (Update.isRunning() && len) {
         if (Update.write(data, len) != len) Update.printError(Serial);
     }
-    if (final) {
+    if (final && !uploadDenied) {
         if (Update.end(true)) {
             Serial.printf("[ota] success: %u bytes\n", (unsigned)(index + len));
         } else {
@@ -207,44 +228,77 @@ void handleUpdateUpload(AsyncWebServerRequest *req, const String &filename,
     }
 }
 
-// Sent after the upload completes; reports the result and arms the reboot.
 void handleUpdateDone(AsyncWebServerRequest *req) {
+    if (!requireAuth(req)) return;  // also rejects the body written above
     const bool ok = !Update.hasError();
     AsyncWebServerResponse *res = req->beginResponse(
         ok ? 200 : 500, "text/plain",
-        ok ? "Update OK — rebooting..." : "Update failed. Check the .bin and retry.");
+        ok ? "Update OK \xE2\x80\x94 rebooting..." : "Update failed. Check the .bin and retry.");
     res->addHeader("Connection", "close");
     req->send(res);
-    if (ok) {
-        rebootDeadline = millis() + 1500;  // let the response flush first
-        rebootArmed = true;
-    }
+    if (ok) armReboot(1500);
 }
 
 } // namespace
 
-void configPortalBegin(const ConfigPortalCallbacks &cb) {
-    callbacks = cb;
+void configPortalSetAuth(const PortalAuth &auth) { g_auth = auth; }
 
+void configPortalBegin(const ConfigPortalCallbacks &cb, const PortalAuth &auth) {
+    callbacks = cb;
+    g_auth = auth;
+
+    // Static SPA assets (gzip, embedded in flash).
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-        req->send(200, "text/html", renderPage());
+        if (!requireAuth(req)) return;
+        sendGzip(req, "text/html", kAppHtmlGz, kAppHtmlGzLen);
     });
-    server.on("/save_ha", HTTP_POST, handleSaveHa);
-    server.on("/save", HTTP_POST, handleSave);
+    server.on("/app.css", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (!requireAuth(req)) return;
+        sendGzip(req, "text/css", kAppCssGz, kAppCssGzLen);
+    });
+    server.on("/app.js", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (!requireAuth(req)) return;
+        sendGzip(req, "application/javascript", kAppJsGz, kAppJsGzLen);
+    });
+
+    // REST: reads.
+    server.on("/api/config", HTTP_GET, handleGetConfig);
+    server.on("/api/entities", HTTP_GET, handleGetEntities);
+    server.on("/api/layout", HTTP_GET, handleGetLayout);
+
+    // REST: writes (JSON bodies, buffered + size-capped by the handler).
+    auto *haH = new AsyncCallbackJsonWebHandler("/api/config/ha", handlePostHa);
+    haH->setMaxContentLength(kMaxBodyBytes);
+    server.addHandler(haH);
+    auto *layoutH = new AsyncCallbackJsonWebHandler("/api/layout", handlePostLayout);
+    layoutH->setMaxContentLength(kMaxBodyBytes);
+    server.addHandler(layoutH);
+    auto *authH = new AsyncCallbackJsonWebHandler("/api/auth", handlePostAuth);
+    authH->setMaxContentLength(kMaxBodyBytes);
+    server.addHandler(authH);
+
+    server.on("/api/reset", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!requireAuth(req)) return;
+        callbacks.onFactoryReset();
+        req->send(200, "application/json", "{\"ok\":true}");
+        armReboot(1000);
+    });
+
+    // OTA.
     server.on("/update", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (!requireAuth(req)) return;
         req->send(200, "text/html", renderUpdatePage());
     });
     server.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
-    server.onNotFound([](AsyncWebServerRequest *req) {
-        req->redirect("/");
-    });
+
+    server.onNotFound([](AsyncWebServerRequest *req) { req->redirect("/"); });
     server.begin();
     Serial.println("[portal] config server started on :80");
 }
 
 void configPortalLoop() {
     if (rebootArmed && (int32_t)(millis() - rebootDeadline) >= 0) {
-        Serial.println("[ota] rebooting now");
+        Serial.println("[app] rebooting now");
         ESP.restart();
     }
 }

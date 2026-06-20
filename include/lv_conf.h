@@ -49,6 +49,7 @@
 #define LV_USE_LABEL 1
 #define LV_USE_BTN 1
 #define LV_USE_LIST 1
+#define LV_USE_TILEVIEW 1   /* swipeable dashboard pages */
 
 /* Logging — set to LV_LOG_LEVEL_WARN while bringing up new boards. */
 #define LV_USE_LOG 0

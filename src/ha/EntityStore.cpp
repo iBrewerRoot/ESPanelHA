@@ -1,5 +1,7 @@
 #include "EntityStore.h"
 
+#include <ArduinoJson.h>
+
 namespace ha {
 
 String EntityStore::domainOf(const String &entityId) {
@@ -15,12 +17,52 @@ bool EntityStore::domainAllowed(const String &domain) const {
     return false;
 }
 
-bool EntityStore::update(const EntityState &e) {
-    EntityState merged = e;
-    if (merged.domain.length() == 0) {
-        merged.domain = domainOf(e.entityId);
+void EntityStore::beginCatalog() {
+    catalogJson_ = "[";
+    catalogJson_.reserve(20000);  // one contiguous block -> low heap fragmentation
+    catalogOpen_ = true;
+    catalogFirst_ = true;
+    entities_.clear();  // rebuilt for the current interest set during the snapshot
+}
+
+bool EntityStore::ingest(const EntityState &e) {
+    String domain = e.domain.length() ? e.domain : domainOf(e.entityId);
+    if (!domainAllowed(domain)) return false;
+
+    // Lightweight catalog entry for the web editor (escaped via ArduinoJson).
+    if (catalogOpen_) {
+        if (!catalogFirst_) catalogJson_ += ',';
+        catalogFirst_ = false;
+        JsonDocument d;
+        d["id"] = e.entityId;
+        d["name"] = e.friendlyName.length() ? e.friendlyName : e.entityId;
+        d["domain"] = domain;
+        String one;
+        serializeJson(d, one);
+        catalogJson_ += one;
     }
-    if (!domainAllowed(merged.domain)) return false;  // keep memory bounded
+
+    // Full state only for entities actually shown on the dashboard.
+    if (interest_.count(e.entityId)) {
+        EntityState merged = e;
+        merged.domain = domain;
+        entities_[e.entityId] = merged;
+    }
+    return true;
+}
+
+void EntityStore::endCatalog() {
+    if (!catalogOpen_) return;
+    catalogJson_ += "]";
+    catalogOpen_ = false;
+}
+
+bool EntityStore::update(const EntityState &e) {
+    String domain = e.domain.length() ? e.domain : domainOf(e.entityId);
+    if (!domainAllowed(domain)) return false;
+    if (!interest_.count(e.entityId)) return false;  // not displayed -> ignore
+    EntityState merged = e;
+    merged.domain = domain;
     entities_[merged.entityId] = merged;
     if (changeCb_) changeCb_(merged);
     return true;
@@ -29,25 +71,6 @@ bool EntityStore::update(const EntityState &e) {
 const EntityState *EntityStore::get(const String &entityId) const {
     auto it = entities_.find(entityId);
     return it == entities_.end() ? nullptr : &it->second;
-}
-
-std::vector<core::AvailableEntity> EntityStore::listByDomain(
-    const std::vector<String> &domains) const {
-    std::vector<core::AvailableEntity> out;
-    for (const auto &kv : entities_) {
-        const EntityState &e = kv.second;
-        bool match = false;
-        for (const auto &d : domains) {
-            if (e.domain == d) { match = true; break; }
-        }
-        if (!match) continue;
-        core::AvailableEntity a;
-        a.entityId = e.entityId;
-        a.friendlyName = e.friendlyName;
-        a.domain = e.domain;
-        out.push_back(a);
-    }
-    return out;
 }
 
 } // namespace ha

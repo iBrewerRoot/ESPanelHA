@@ -62,6 +62,20 @@ void HAClient::begin(const core::HAConfig &cfg, EntityStore *store) {
     store_ = store;
     Serial.printf("[ha] begin %s://%s:%u/api/websocket\n",
                   cfg_.useTls ? "wss" : "ws", cfg_.host.c_str(), cfg_.port);
+
+    // Close any existing WS so its TLS context is freed before the REST snapshot
+    // (keeps us to a single TLS session even when begin() is called again, e.g.
+    // after a layout change).
+    ws_.disconnect();
+
+    // Single-TLS ordering: take the initial state snapshot over REST BEFORE
+    // opening the WebSocket. The wss and https TLS sessions each need ~40 KB of
+    // heap; holding both at once exhausts memory on large instances (the REST
+    // parse was failing with IncompleteInput at ~8 KB free). Fetching first, then
+    // letting the HTTPS client free its TLS context, leaves room for the wss one.
+    setStatus(HAStatus::Connecting);
+    fetchStatesViaRest();
+
     // TLS uses insecure mode (no cert validation) — fine on a trusted LAN and
     // for Nabu Casa; suitable for HA's typical self-signed certificates.
     if (cfg_.useTls) {
@@ -74,7 +88,6 @@ void HAClient::begin(const core::HAConfig &cfg, EntityStore *store) {
     });
     ws_.setReconnectInterval(5000);
     ws_.enableHeartbeat(15000, 3000, 2);
-    setStatus(HAStatus::Connecting);
 }
 
 void HAClient::loop() { ws_.loop(); }
@@ -114,11 +127,12 @@ void HAClient::handleMessage(const char *payload, size_t length) {
     }
     if (strcmp(type, "auth_ok") == 0) {
         Serial.println("[ha] auth_ok");
-        // Subscribe first so no change is missed during the REST snapshot below.
         subscribeStateChanged();
-        if (fetchStatesViaRest()) {
-            setStatus(HAStatus::Ready);
-        }
+        // The snapshot is normally taken in begin() over a single TLS context.
+        // Only fall back to a (dual-TLS) fetch here if that came back empty, e.g.
+        // the network wasn't ready yet at begin().
+        if (store_ && store_->snapshotEmpty()) fetchStatesViaRest();
+        setStatus(HAStatus::Ready);
         return;
     }
     if (strcmp(type, "auth_invalid") == 0) {
@@ -223,7 +237,7 @@ int HAClient::parseStatesArray(Stream &s) {
             return -1;
         }
         EntityState e;
-        if (parseState(elem.as<JsonObjectConst>(), e) && store_->update(e)) n++;
+        if (parseState(elem.as<JsonObjectConst>(), e) && store_->ingest(e)) n++;
     }
     return n;
 }
@@ -258,13 +272,15 @@ bool HAClient::fetchStatesViaRest() {
     }
 
     BlockingClientStream stream(http.getStream());
+    store_->beginCatalog();
     const int n = parseStatesArray(stream);
+    store_->endCatalog();
     http.end();
     if (n < 0) {
         Serial.println("[ha] rest states: parse failed");
         return false;
     }
-    Serial.printf("[ha] rest states: %d entities stored\n", n);
+    Serial.printf("[ha] rest states: %d entities cataloged\n", n);
     return true;
 }
 

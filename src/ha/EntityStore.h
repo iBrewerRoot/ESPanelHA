@@ -10,6 +10,7 @@
 #include <Arduino.h>
 #include <functional>
 #include <map>
+#include <set>
 #include <vector>
 
 namespace ha {
@@ -32,20 +33,36 @@ class EntityStore {
 public:
     using ChangeCb = std::function<void(const EntityState &)>;
 
-    /** Only store entities in these domains (e.g. {"light","switch"}). HA's full
-     *  state dump is ~200 KB across all domains; keeping only what the UI uses
-     *  bounds memory. Empty filter (default) accepts everything. */
+    /** Domains offered to the user (e.g. {"light","switch","sensor"}). Entities
+     *  outside these are ignored entirely. Empty filter accepts everything. */
     void setDomainFilter(std::vector<String> domains) { domainFilter_ = std::move(domains); }
 
-    /** Upsert an entity. Notifies the listener if registered. Returns false (and
-     *  stores nothing) for entities outside the domain filter. */
+    /** Entities to keep FULL state for (those shown on the dashboard). All other
+     *  selectable entities only contribute to the lightweight catalog, so the
+     *  resident footprint stays bounded by the layout, not the HA instance size. */
+    void setInterest(const std::vector<String> &entityIds) {
+        interest_ = std::set<String>(entityIds.begin(), entityIds.end());
+    }
+
+    /** Snapshot ingestion (one call per entity while streaming /api/states):
+     *  appends to the catalog (if its domain is allowed) and stores full state
+     *  only for entities of interest. Bracket calls with begin/endCatalog(). */
+    void beginCatalog();
+    bool ingest(const EntityState &e);
+    void endCatalog();
+
+    /** Live update (state_changed). Stores/notifies only for entities of
+     *  interest; others are dropped. Returns true if applied. */
     bool update(const EntityState &e);
 
     const EntityState *get(const String &entityId) const;
 
-    /** Entities whose domain is one of `domains` (e.g. controllable ones). */
-    std::vector<core::AvailableEntity> listByDomain(
-        const std::vector<String> &domains) const;
+    /** Lightweight JSON catalog [{id,name,domain},...] of all selectable
+     *  entities — served verbatim to the web editor (one contiguous block). */
+    const String &catalogJson() const { return catalogJson_; }
+
+    /** True if no snapshot catalog has been built (used to retry a failed fetch). */
+    bool snapshotEmpty() const { return catalogJson_.length() <= 2; }
 
     void onChange(ChangeCb cb) { changeCb_ = std::move(cb); }
 
@@ -55,8 +72,12 @@ public:
 private:
     bool domainAllowed(const String &domain) const;
 
-    std::map<String, EntityState> entities_;
+    std::map<String, EntityState> entities_;  // full state, interest-only
+    std::set<String> interest_;               // entity ids on the dashboard
     std::vector<String> domainFilter_;
+    String catalogJson_ = "[]";               // lightweight picker catalog
+    bool catalogOpen_ = false;
+    bool catalogFirst_ = true;
     ChangeCb changeCb_;
 };
 

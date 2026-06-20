@@ -35,8 +35,10 @@ void uiShowConfigureHa(const String &ip);
 /** Shown once WiFi/HA are connected but no entities are chosen yet: tells the
  *  user which address to open to pick entities. */
 void uiShowConnected(const String &ip);
-void uiShowDashboard(const std::vector<core::SelectedEntity> &entities,
-                     const ha::EntityStore &store);
+
+/** Build the swipeable, multi-page dashboard from the layout. Only the visible
+ *  page's widgets are realized at a time (memory-conscious for the C6). */
+void uiShowDashboard(const core::Layout &layout, const ha::EntityStore &store);
 
 /** Refresh a single card from a new state (no-op if not on the dashboard). */
 void uiUpdateEntity(const ha::EntityState &e);

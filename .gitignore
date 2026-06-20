@@ -11,8 +11,8 @@
 Tumbs.db
 .claude/
 
-# Generated at build time by scripts/gzip_web.py
-web/*.htm.gz
+# Generated at build time by scripts/gen_web_assets.py (gzipped web SPA)
+include/web_assets.h
 
 # User-specific files
 *.rsuser

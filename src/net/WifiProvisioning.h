@@ -23,6 +23,10 @@ void wifiBegin(core::AppConfig &cfg);
 /** Drive the WiFiManager portal state machine. Call every loop iteration. */
 void wifiLoop();
 
+/** Shut down the WiFiManager captive portal and its web server. Must be called
+ *  once connected, before starting our own server, so port 80 is freed. */
+void wifiStopPortal();
+
 /** True once associated to an AP in station mode. */
 bool wifiConnected();
 
