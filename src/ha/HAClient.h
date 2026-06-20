@@ -40,10 +40,15 @@ private:
     void onWsEvent(WStype_t type, uint8_t *payload, size_t length);
     void handleMessage(const char *payload, size_t length);
     void sendAuth();
-    void requestStates();
     void subscribeStateChanged();
     uint32_t sendCommand(const String &json);
     void setStatus(HAStatus s);
+
+    // Initial snapshot via REST (the WS get_states response exceeds the 15 KB
+    // WebSocket frame limit). Streams /api/states and parses it one entity at a
+    // time, so memory stays bounded regardless of instance size.
+    bool fetchStatesViaRest();
+    int parseStatesArray(Stream &s);
 
     WebSocketsClient ws_;
     EntityStore *store_ = nullptr;
@@ -52,7 +57,6 @@ private:
     StatusCb statusCb_;
 
     uint32_t nextId_ = 1;
-    uint32_t getStatesId_ = 0;
 };
 
 } // namespace ha

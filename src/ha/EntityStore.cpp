@@ -7,13 +7,23 @@ String EntityStore::domainOf(const String &entityId) {
     return dot > 0 ? entityId.substring(0, dot) : String();
 }
 
-void EntityStore::update(const EntityState &e) {
+bool EntityStore::domainAllowed(const String &domain) const {
+    if (domainFilter_.empty()) return true;
+    for (const auto &d : domainFilter_) {
+        if (d == domain) return true;
+    }
+    return false;
+}
+
+bool EntityStore::update(const EntityState &e) {
     EntityState merged = e;
     if (merged.domain.length() == 0) {
         merged.domain = domainOf(e.entityId);
     }
+    if (!domainAllowed(merged.domain)) return false;  // keep memory bounded
     entities_[merged.entityId] = merged;
     if (changeCb_) changeCb_(merged);
+    return true;
 }
 
 const EntityState *EntityStore::get(const String &entityId) const {

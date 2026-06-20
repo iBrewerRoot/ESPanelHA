@@ -1,10 +1,28 @@
 #include "HAClient.h"
 
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 
 namespace ha {
 
 namespace {
+
+/* Normalize a user-entered host: HA expects a bare hostname/IP, but users often
+ * paste the full browser URL. Strip scheme, any path, and surrounding spaces. */
+String sanitizeHost(const String &raw) {
+    String h = raw;
+    h.trim();
+    int scheme = h.indexOf("://");
+    if (scheme >= 0) h = h.substring(scheme + 3);
+    int slash = h.indexOf('/');
+    if (slash >= 0) h = h.substring(0, slash);  // drop path
+    int colon = h.indexOf(':');
+    if (colon >= 0) h = h.substring(0, colon);  // drop any :port (port field wins)
+    h.trim();
+    return h;
+}
 
 /* Parse a HA state object (from get_states or a state_changed new_state) into
  * an EntityState. Returns false if it isn't a usable object. */
@@ -40,7 +58,10 @@ bool parseState(JsonObjectConst obj, EntityState &out) {
 
 void HAClient::begin(const core::HAConfig &cfg, EntityStore *store) {
     cfg_ = cfg;
+    cfg_.host = sanitizeHost(cfg_.host);
     store_ = store;
+    Serial.printf("[ha] begin %s://%s:%u/api/websocket\n",
+                  cfg_.useTls ? "wss" : "ws", cfg_.host.c_str(), cfg_.port);
     // TLS uses insecure mode (no cert validation) — fine on a trusted LAN and
     // for Nabu Casa; suitable for HA's typical self-signed certificates.
     if (cfg_.useTls) {
@@ -61,10 +82,16 @@ void HAClient::loop() { ws_.loop(); }
 void HAClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
     switch (type) {
         case WStype_CONNECTED:
+            Serial.println("[ha] ws connected");
             setStatus(HAStatus::Authenticating);
             break;
         case WStype_DISCONNECTED:
+            Serial.println("[ha] ws disconnected (will retry)");
             setStatus(HAStatus::Disconnected);
+            break;
+        case WStype_ERROR:
+            Serial.printf("[ha] ws error: %.*s\n", (int)length,
+                          payload ? reinterpret_cast<const char *>(payload) : "");
             break;
         case WStype_TEXT:
             handleMessage(reinterpret_cast<const char *>(payload), length);
@@ -81,28 +108,22 @@ void HAClient::handleMessage(const char *payload, size_t length) {
     const char *type = doc["type"] | "";
 
     if (strcmp(type, "auth_required") == 0) {
+        Serial.println("[ha] auth_required -> sending token");
         sendAuth();
         return;
     }
     if (strcmp(type, "auth_ok") == 0) {
-        requestStates();
+        Serial.println("[ha] auth_ok");
+        // Subscribe first so no change is missed during the REST snapshot below.
+        subscribeStateChanged();
+        if (fetchStatesViaRest()) {
+            setStatus(HAStatus::Ready);
+        }
         return;
     }
     if (strcmp(type, "auth_invalid") == 0) {
+        Serial.printf("[ha] auth_invalid: %s\n", doc["message"] | "(bad token)");
         setStatus(HAStatus::AuthFailed);
-        return;
-    }
-
-    if (strcmp(type, "result") == 0) {
-        const uint32_t id = doc["id"] | 0;
-        if (id == getStatesId_ && doc["success"].as<bool>()) {
-            for (JsonObjectConst s : doc["result"].as<JsonArrayConst>()) {
-                EntityState e;
-                if (parseState(s, e)) store_->update(e);
-            }
-            subscribeStateChanged();
-            setStatus(HAStatus::Ready);
-        }
         return;
     }
 
@@ -123,14 +144,128 @@ void HAClient::sendAuth() {
     ws_.sendTXT(out);
 }
 
-void HAClient::requestStates() {
-    getStatesId_ = nextId_++;
-    JsonDocument doc;
-    doc["id"] = getStatesId_;
-    doc["type"] = "get_states";
-    String out;
-    serializeJson(doc, out);
-    ws_.sendTXT(out);
+namespace {
+
+// Wraps the HTTP(S) client so reads block until data arrives or the connection
+// truly ends. Without this, TLS delivers the body in bursts and a transient
+// empty read() looks like EOF to ArduinoJson (IncompleteInput).
+class BlockingClientStream : public Stream {
+public:
+    explicit BlockingClientStream(WiFiClient &c, uint32_t timeoutMs = 8000)
+        : client_(c), timeoutMs_(timeoutMs) {}
+    int available() override { return client_.available(); }
+    int read() override { return waitData() ? client_.read() : -1; }
+    int peek() override { return waitData() ? client_.peek() : -1; }
+    size_t write(uint8_t b) override { return client_.write(b); }
+    size_t write(const uint8_t *b, size_t n) override { return client_.write(b, n); }
+
+private:
+    bool waitData() {
+        const uint32_t start = millis();
+        while (client_.available() == 0) {
+            if (!client_.connected()) return false;  // server closed, no more data
+            if (millis() - start > timeoutMs_) return false;
+            delay(1);
+        }
+        return true;
+    }
+    WiFiClient &client_;
+    uint32_t timeoutMs_;
+};
+
+// Block until a byte is readable, then return it without consuming (-1 on timeout).
+int peekBlocking(Stream &s, uint32_t timeoutMs = 8000) {
+    const uint32_t start = millis();
+    while (s.available() == 0) {
+        if (millis() - start > timeoutMs) return -1;
+        delay(1);
+    }
+    return s.peek();
+}
+
+// Consume whitespace and element separators; peek the next meaningful byte.
+int nextMeaningful(Stream &s) {
+    while (true) {
+        const int c = peekBlocking(s);
+        if (c == -1) return -1;
+        if (c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == ',') {
+            s.read();
+            continue;
+        }
+        return c;
+    }
+}
+
+} // namespace
+
+// Parse a streamed JSON array of HA state objects, one element at a time, so
+// only a single entity is held in memory at once.
+int HAClient::parseStatesArray(Stream &s) {
+    // Advance to the opening '['.
+    while (true) {
+        const int c = peekBlocking(s);
+        if (c == -1) return -1;
+        s.read();
+        if (c == '[') break;
+    }
+
+    int n = 0;
+    while (true) {
+        const int c = nextMeaningful(s);
+        if (c == -1) return -1;
+        if (c == ']') { s.read(); break; }
+
+        JsonDocument elem;  // freed each iteration -> bounded memory
+        const DeserializationError err = deserializeJson(elem, s);
+        if (err) {
+            Serial.printf("[ha] rest parse error after %d entities: %s (heap=%u)\n",
+                          n, err.c_str(), (unsigned)ESP.getFreeHeap());
+            return -1;
+        }
+        EntityState e;
+        if (parseState(elem.as<JsonObjectConst>(), e) && store_->update(e)) n++;
+    }
+    return n;
+}
+
+bool HAClient::fetchStatesViaRest() {
+    WiFiClientSecure secure;
+    WiFiClient plain;
+    WiFiClient *net;
+    if (cfg_.useTls) {
+        secure.setInsecure();  // same trust model as the wss connection
+        net = &secure;
+    } else {
+        net = &plain;
+    }
+
+    const String url = String(cfg_.useTls ? "https://" : "http://") + cfg_.host +
+                       ":" + cfg_.port + "/api/states";
+    HTTPClient http;
+    if (!http.begin(*net, url)) {
+        Serial.println("[ha] rest begin failed");
+        return false;
+    }
+    http.addHeader("Authorization", String("Bearer ") + cfg_.token);
+    http.useHTTP10(true);  // forces non-chunked body so the stream is clean JSON
+    http.setTimeout(10000);
+
+    const int code = http.GET();
+    if (code != 200) {
+        Serial.printf("[ha] rest GET /api/states -> %d\n", code);
+        http.end();
+        return false;
+    }
+
+    BlockingClientStream stream(http.getStream());
+    const int n = parseStatesArray(stream);
+    http.end();
+    if (n < 0) {
+        Serial.println("[ha] rest states: parse failed");
+        return false;
+    }
+    Serial.printf("[ha] rest states: %d entities stored\n", n);
+    return true;
 }
 
 void HAClient::subscribeStateChanged() {
@@ -150,7 +285,12 @@ uint32_t HAClient::sendCommand(const String &json) {
 }
 
 void HAClient::toggle(const String &entityId) {
-    if (status_ != HAStatus::Ready) return;
+    if (status_ != HAStatus::Ready) {
+        Serial.printf("[ha] toggle %s dropped (status=%d, not ready)\n",
+                      entityId.c_str(), (int)status_);
+        return;
+    }
+    Serial.printf("[ha] toggle %s\n", entityId.c_str());
     JsonDocument doc;
     doc["id"] = nextId_++;
     doc["type"] = "call_service";
@@ -163,7 +303,12 @@ void HAClient::toggle(const String &entityId) {
 }
 
 void HAClient::lightSetBrightnessPct(const String &entityId, int pct) {
-    if (status_ != HAStatus::Ready) return;
+    if (status_ != HAStatus::Ready) {
+        Serial.printf("[ha] brightness %s dropped (status=%d, not ready)\n",
+                      entityId.c_str(), (int)status_);
+        return;
+    }
+    Serial.printf("[ha] brightness %s = %d%%\n", entityId.c_str(), pct);
     pct = constrain(pct, 0, 100);
     JsonDocument doc;
     doc["id"] = nextId_++;
@@ -180,6 +325,7 @@ void HAClient::lightSetBrightnessPct(const String &entityId, int pct) {
 void HAClient::setStatus(HAStatus s) {
     if (s == status_) return;
     status_ = s;
+    Serial.printf("[ha] status -> %d\n", (int)s);
     if (statusCb_) statusCb_(s);
 }
 

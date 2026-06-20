@@ -69,6 +69,9 @@ void rebuildDashboard() {
 // Start (or restart) the HA WebSocket client with the current config.
 void startHomeAssistant() {
     if (!g_haStarted) {
+        // Store only what the UI uses — HA's full state dump is ~200 KB and would
+        // otherwise exhaust the heap (and starve TLS) on the initial REST fetch.
+        g_store.setDomainFilter(kControllableDomains);
         g_store.onChange([](const ha::EntityState &e) { ui::uiUpdateEntity(e); });
         g_client.onStatus([](ha::HAStatus s) {
             ui::uiSetConnectionStatus(statusText(s));

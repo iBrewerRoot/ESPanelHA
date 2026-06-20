@@ -32,8 +32,14 @@ class EntityStore {
 public:
     using ChangeCb = std::function<void(const EntityState &)>;
 
-    /** Upsert an entity. Notifies the listener if registered. */
-    void update(const EntityState &e);
+    /** Only store entities in these domains (e.g. {"light","switch"}). HA's full
+     *  state dump is ~200 KB across all domains; keeping only what the UI uses
+     *  bounds memory. Empty filter (default) accepts everything. */
+    void setDomainFilter(std::vector<String> domains) { domainFilter_ = std::move(domains); }
+
+    /** Upsert an entity. Notifies the listener if registered. Returns false (and
+     *  stores nothing) for entities outside the domain filter. */
+    bool update(const EntityState &e);
 
     const EntityState *get(const String &entityId) const;
 
@@ -47,7 +53,10 @@ public:
     static String domainOf(const String &entityId);
 
 private:
+    bool domainAllowed(const String &domain) const;
+
     std::map<String, EntityState> entities_;
+    std::vector<String> domainFilter_;
     ChangeCb changeCb_;
 };
 
