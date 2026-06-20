@@ -43,7 +43,16 @@ String renderHaForm() {
     String f = F("<form method='POST' action='/save_ha'><h3>Home Assistant</h3>");
     f += "<p>Host / IP</p><input name='host' value='" + htmlEscape(ha.host) + "'>";
     f += "<p>Port</p><input name='port' value='" + String(ha.port) + "'>";
-    f += "<p>Long-lived token</p><input name='token' value='" + htmlEscape(ha.token) + "'>";
+    // The token is never echoed back (it would be readable in the page/source).
+    // Empty field on save means "keep the stored token".
+    const bool hasToken = ha.token.length() > 0;
+    f += "<p>Long-lived token</p><input name='token' type='password' autocomplete='off' placeholder='";
+    f += hasToken ? "Saved \xE2\x80\x94 leave blank to keep" : "Paste your token";
+    f += "'>";
+    if (hasToken) {
+        f += F("<p>A token is already saved. Leave this blank to keep it, or paste "
+               "a new one to replace it.</p>");
+    }
     f += "<label class='chk'><input type='checkbox' name='tls'";
     f += ha.useTls ? " checked" : "";
     f += "> Use HTTPS/WSS (TLS)</label>";
@@ -144,13 +153,18 @@ String renderUpdatePage() {
 }
 
 void handleSaveHa(AsyncWebServerRequest *req) {
-    core::HAConfig ha;
+    core::HAConfig ha = callbacks.currentHa();  // preserve fields not re-entered (token)
     if (req->hasParam("host", true)) ha.host = req->getParam("host", true)->value();
     if (req->hasParam("port", true)) {
         ha.port = static_cast<uint16_t>(req->getParam("port", true)->value().toInt());
     }
     if (ha.port == 0) ha.port = 8123;
-    if (req->hasParam("token", true)) ha.token = req->getParam("token", true)->value();
+    // Only overwrite the token when a new one is entered; blank keeps the stored one.
+    if (req->hasParam("token", true)) {
+        String tok = req->getParam("token", true)->value();
+        tok.trim();
+        if (tok.length()) ha.token = tok;
+    }
     ha.useTls = req->hasParam("tls", true);  // checkbox only present when checked
     callbacks.onSaveHa(ha);
     req->redirect("/");
