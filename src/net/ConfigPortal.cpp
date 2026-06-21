@@ -273,6 +273,36 @@ void configPortalBegin(const ConfigPortalCallbacks &cb, const PortalAuth &auth) 
         sendGzip(req, "image/svg+xml", kMdiSpriteGz, kMdiSpriteGzLen);
     });
 
+    // Brand favicons + PWA icons + manifest. Public (no auth): browsers fetch
+    // favicons automatically and these assets aren't sensitive.
+    server.on("/wordmark.svg", HTTP_GET, [](AsyncWebServerRequest *req) {
+        sendGzip(req, "image/svg+xml", kWordmarkGz, kWordmarkGzLen);
+    });
+    server.on("/favicon.svg", HTTP_GET, [](AsyncWebServerRequest *req) {
+        sendGzip(req, "image/svg+xml", kFaviconSvgGz, kFaviconSvgGzLen);
+    });
+    server.on("/favicon-16.png", HTTP_GET, [](AsyncWebServerRequest *req) {
+        sendGzip(req, "image/png", kFavicon16Gz, kFavicon16GzLen);
+    });
+    server.on("/favicon-32.png", HTTP_GET, [](AsyncWebServerRequest *req) {
+        sendGzip(req, "image/png", kFavicon32Gz, kFavicon32GzLen);
+    });
+    server.on("/apple-touch-icon-180.png", HTTP_GET, [](AsyncWebServerRequest *req) {
+        sendGzip(req, "image/png", kAppleTouchGz, kAppleTouchGzLen);
+    });
+    server.on("/icon-192.png", HTTP_GET, [](AsyncWebServerRequest *req) {
+        sendGzip(req, "image/png", kIcon192Gz, kIcon192GzLen);
+    });
+    server.on("/icon-512.png", HTTP_GET, [](AsyncWebServerRequest *req) {
+        sendGzip(req, "image/png", kIcon512Gz, kIcon512GzLen);
+    });
+    server.on("/maskable-512.png", HTTP_GET, [](AsyncWebServerRequest *req) {
+        sendGzip(req, "image/png", kMaskable512Gz, kMaskable512GzLen);
+    });
+    server.on("/site.webmanifest", HTTP_GET, [](AsyncWebServerRequest *req) {
+        sendGzip(req, "application/manifest+json", kWebManifestGz, kWebManifestGzLen);
+    });
+
     // REST: reads.
     server.on("/api/config", HTTP_GET, handleGetConfig);
     server.on("/api/entities", HTTP_GET, handleGetEntities);

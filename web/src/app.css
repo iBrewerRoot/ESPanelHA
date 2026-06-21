@@ -16,7 +16,7 @@
   --radius: 14px;
   --radius-sm: 10px;
   --gap: 14px;
-  --bar-h: 56px;
+  --bar-h: 64px;
   font-family: Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
@@ -33,12 +33,8 @@ body { background: var(--bg); color: var(--text); }
   background: linear-gradient(180deg, #1a222b, #161b21);
   border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; }
-.logo {
-  width: 22px; height: 22px; border-radius: 6px;
-  background: radial-gradient(circle at 30% 30%, var(--primary), #0277bd);
-  box-shadow: 0 0 0 3px rgba(3,169,244,.15);
-}
+.brand { display: flex; align-items: center; }
+.wordmark { height: 54px; width: auto; display: block; }
 .tabs { display: flex; gap: 6px; }
 .tab {
   background: transparent; color: var(--muted);

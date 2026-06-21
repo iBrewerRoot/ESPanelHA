@@ -1,10 +1,8 @@
 <div align="center">
 
-<!-- 📌 LOGO: drop an image at docs/media/logo.png (~120px square), then uncomment:
-<img src="docs/media/logo.png" alt="ESPanelHA logo" width="120" />
--->
+<img src="docs/branding/logo-512.png" alt="ESPanelHA logo" width="120" />
 
-# 📟 ESPanelHA
+# ESPanelHA
 
 ### ESP32 AMOLED touch panel for Home Assistant
 
