@@ -31,14 +31,16 @@
 #define LV_DISP_DEF_REFR_PERIOD 16
 #define LV_INDEV_DEF_READ_PERIOD 16
 
-/* Fonts used by the UI. These panels are small but very high-DPI (e.g. 368x448
- * on 1.8"), so large fonts are needed for legibility. Default is 24px. */
-#define LV_FONT_MONTSERRAT_14 1
-#define LV_FONT_MONTSERRAT_18 1
+/* The UI renders text with our accented Montserrat subsets (montserrat_fr_*,
+ * see src/ui/text_fonts.h) so French names display correctly. Only the built-in
+ * 24px stays enabled as LV_FONT_DEFAULT (fallback for objects with no explicit
+ * font); the other built-in sizes are off to save flash. */
+#define LV_FONT_MONTSERRAT_14 0
+#define LV_FONT_MONTSERRAT_18 0
 #define LV_FONT_MONTSERRAT_24 1
-#define LV_FONT_MONTSERRAT_28 1
-#define LV_FONT_MONTSERRAT_32 1
-#define LV_FONT_MONTSERRAT_40 1
+#define LV_FONT_MONTSERRAT_28 0
+#define LV_FONT_MONTSERRAT_32 0
+#define LV_FONT_MONTSERRAT_40 0
 #define LV_FONT_DEFAULT &lv_font_montserrat_24
 
 /* Widgets needed by the dashboard / setup screens. */

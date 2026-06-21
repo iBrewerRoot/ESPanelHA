@@ -9,7 +9,7 @@
  *
  * Run from scripts/mdi-font:  npm install && npm run gen
  */
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -161,3 +161,71 @@ writeFileSync(outImpl, c);
 console.log(`OK: ${icons.length} icons -> ${outFontC}`);
 console.log(`     header -> ${outHeader}`);
 console.log(`     impl   -> ${outImpl}`);
+
+// --- emit web SVG sprite (same icons.txt -> device font AND web preview) ------
+// The web editor injects this sprite into its DOM so <use href="#mdi-<name>">
+// renders real MDI icons offline (AP mode, no CDN), recolored via currentColor.
+const svgDir = resolve(__dirname, "node_modules/@mdi/svg/svg");
+const outSprite = join(repoRoot, "web", "src", "mdi-sprite.svg");
+let symbols = "";
+let spriteCount = 0;
+for (const { name } of icons) {
+  const svgPath = join(svgDir, `${name}.svg`);
+  if (!existsSync(svgPath)) {
+    console.error(`No @mdi/svg file for: ${name} (sprite skipped)`);
+    continue;
+  }
+  const svg = readFileSync(svgPath, "utf8");
+  const m = svg.match(/\bd="([^"]+)"/);
+  if (!m) {
+    console.error(`No path data in svg for: ${name}`);
+    continue;
+  }
+  symbols += `<symbol id="mdi-${name}" viewBox="0 0 24 24"><path fill="currentColor" d="${m[1]}"/></symbol>`;
+  spriteCount++;
+}
+const sprite =
+  `<svg xmlns="http://www.w3.org/2000/svg" style="display:none">${symbols}</svg>\n`;
+writeFileSync(outSprite, sprite);
+console.log(`     web sprite -> ${outSprite} (${spriteCount} icons)`);
+
+// --- emit accented Montserrat text fonts (French range) ----------------------
+// The built-in lv_font_montserrat_* only cover ASCII, so accented entity names
+// (é, è, à, ç, °, ·, …) render as boxes on screen. Generate our own subsets from
+// the bundled Montserrat TTF covering ASCII + Latin-1 + a few French extras.
+const montTtf = resolve(__dirname, "Montserrat-Medium.ttf");
+const TEXT_SIZES = [14, 18, 24, 28, 32, 40];
+// ASCII, Latin-1 Supplement (accents, °, ·, « »), Œ/œ, curly quotes, euro.
+const TEXT_RANGE = "0x20-0x7F,0xA0-0xFF,0x152-0x153,0x2018-0x201F,0x20AC";
+let textHeader = `/*
+ * Accented Montserrat text fonts for the LVGL UI — GENERATED, do not edit.
+ * Regenerate via scripts/mdi-font (npm run gen). Covers ASCII + French accents
+ * so entity names render correctly (the built-in montserrat fonts are ASCII).
+ */
+#ifndef UI_TEXT_FONTS_H
+#define UI_TEXT_FONTS_H
+
+#include <lvgl.h>
+
+`;
+for (const sz of TEXT_SIZES) {
+  const name = `montserrat_fr_${sz}`;
+  const out = join(outFontDir, `${name}.c`);
+  const args = [
+    "lv_font_conv",
+    "--font", montTtf,
+    "--size", String(sz),
+    "--bpp", String(BPP),
+    "--format", "lvgl",
+    "--lv-font-name", name,
+    "--no-compress",
+    "-o", out,
+    "-r", TEXT_RANGE,
+  ];
+  console.log(`Converting Montserrat ${sz}px (FR range)...`);
+  execFileSync("npx", args, { stdio: "inherit", cwd: __dirname, shell: process.platform === "win32" });
+  textHeader += `LV_FONT_DECLARE(${name});\n`;
+}
+textHeader += `\n#endif /* UI_TEXT_FONTS_H */\n`;
+writeFileSync(join(repoRoot, "src", "ui", "text_fonts.h"), textHeader);
+console.log(`     text fonts -> src/ui/fonts/montserrat_fr_*.c + src/ui/text_fonts.h`);

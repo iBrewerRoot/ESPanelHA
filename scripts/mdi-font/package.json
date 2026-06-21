@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@mdi/font": "^7.4.47",
+    "@mdi/svg": "^7.4.47",
     "lv_font_conv": "^1.5.3"
   }
 }

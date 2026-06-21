@@ -31,6 +31,11 @@ const MdiEntry kIcons[] = {
     {"motion-sensor", MDI_MOTION_SENSOR},
     {"door", MDI_DOOR},
     {"window-closed-variant", MDI_WINDOW_CLOSED_VARIANT},
+    {"home-assistant", MDI_HOME_ASSISTANT},
+    {"signal-cellular-1", MDI_SIGNAL_CELLULAR_1},
+    {"signal-cellular-2", MDI_SIGNAL_CELLULAR_2},
+    {"signal-cellular-3", MDI_SIGNAL_CELLULAR_3},
+    {"signal-cellular-outline", MDI_SIGNAL_CELLULAR_OUTLINE},
     {"help-circle-outline", MDI_HELP_CIRCLE_OUTLINE},
     {"alert-circle-outline", MDI_ALERT_CIRCLE_OUTLINE},
 };

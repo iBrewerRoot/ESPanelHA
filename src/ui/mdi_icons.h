@@ -48,6 +48,11 @@ const char *mdiGlyph(const char *name);
 #define MDI_MOTION_SENSOR "\xF3\xB0\xB6\x91" /* mdi:motion-sensor U+F0D91 */
 #define MDI_DOOR "\xF3\xB0\xA0\x9A" /* mdi:door U+F081A */
 #define MDI_WINDOW_CLOSED_VARIANT "\xF3\xB1\x87\x9B" /* mdi:window-closed-variant U+F11DB */
+#define MDI_HOME_ASSISTANT "\xF3\xB0\x9F\x90" /* mdi:home-assistant U+F07D0 */
+#define MDI_SIGNAL_CELLULAR_1 "\xF3\xB0\xA2\xBC" /* mdi:signal-cellular-1 U+F08BC */
+#define MDI_SIGNAL_CELLULAR_2 "\xF3\xB0\xA2\xBD" /* mdi:signal-cellular-2 U+F08BD */
+#define MDI_SIGNAL_CELLULAR_3 "\xF3\xB0\xA2\xBE" /* mdi:signal-cellular-3 U+F08BE */
+#define MDI_SIGNAL_CELLULAR_OUTLINE "\xF3\xB0\xA2\xBF" /* mdi:signal-cellular-outline U+F08BF */
 #define MDI_HELP_CIRCLE_OUTLINE "\xF3\xB0\x98\xA5" /* mdi:help-circle-outline U+F0625 */
 #define MDI_ALERT_CIRCLE_OUTLINE "\xF3\xB0\x97\x96" /* mdi:alert-circle-outline U+F05D6 */
 

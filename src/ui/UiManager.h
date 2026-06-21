@@ -46,6 +46,17 @@ void uiUpdateEntity(const ha::EntityState &e);
 /** Top-bar connection indicator text. */
 void uiSetConnectionStatus(const String &text);
 
+/** Update the WiFi-to-AP indicator on the settings menu (signal from RSSI). */
+void uiSetWifiStatus(bool connected, int rssi);
+
+/** Remember the config-portal URL shown on the settings screen. */
+void uiSetPortalUrl(const String &url);
+
+/** Show the settings / info screen (config-portal URL + future controls). It
+ *  appears automatically when no dashboard is configured, and is reachable from
+ *  the dashboard with a swipe down (swipe up returns to the dashboard). */
+void uiShowSettings();
+
 } // namespace ui
 
 #endif /* UI_UI_MANAGER_H */

@@ -15,6 +15,15 @@ constexpr const char *kEntitiesPath = "/entities.json";  // legacy (migrated awa
 constexpr const char *kLayoutPath = "/layout.json";
 Preferences prefs;
 
+// A missing key OR a stray literal "null" string (persisted by an earlier
+// serialization bug, where as<String>() on an absent key yielded "null") both
+// mean "no value". Avoids showing "null" as an entity/page name on screen.
+String jsonStr(JsonVariantConst v) {
+    String s = v | "";
+    if (s == "null") s = "";
+    return s;
+}
+
 void readLayoutFile(core::Layout &layout) {
     layout.pages.clear();
     File f = LittleFS.open(kLayoutPath, "r");
@@ -27,11 +36,11 @@ void readLayoutFile(core::Layout &layout) {
 
     for (JsonObject p : doc["pages"].as<JsonArray>()) {
         core::LayoutPage page;
-        page.title = p["title"].as<String>();
+        page.title = jsonStr(p["title"]);
         for (JsonObject t : p["tiles"].as<JsonArray>()) {
             core::LayoutTile tile;
             tile.entityId = t["id"].as<String>();
-            tile.label = t["label"].as<String>();
+            tile.label = jsonStr(t["label"]);
             tile.w = t["w"] | 1;
             tile.h = t["h"] | 1;
             if (tile.w < 1 || tile.w > 2) tile.w = 1;
@@ -57,7 +66,7 @@ void migrateEntitiesToLayout(core::Layout &layout) {
     for (JsonObject e : doc["entities"].as<JsonArray>()) {
         core::LayoutTile tile;
         tile.entityId = e["id"].as<String>();
-        tile.label = e["label"].as<String>();
+        tile.label = jsonStr(e["label"]);
         page.tiles.push_back(tile);
     }
     if (!page.tiles.empty()) {
@@ -125,7 +134,7 @@ void saveLayout(const core::Layout &layout) {
             if (tileCount++ >= core::kMaxTilesPerPage) break;
             JsonObject to = tiles.add<JsonObject>();
             to["id"] = t.entityId;
-            to["label"] = t.label;
+            if (t.label.length()) to["label"] = t.label;  // omit empty (no "null")
             to["w"] = t.w;
             to["h"] = t.h;
         }

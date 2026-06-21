@@ -36,6 +36,13 @@ motion-sensor
 door
 window-closed-variant
 
+# --- status / chrome ---
+home-assistant
+signal-cellular-1
+signal-cellular-2
+signal-cellular-3
+signal-cellular-outline
+
 # --- generic / fallback ---
 help-circle-outline
 alert-circle-outline

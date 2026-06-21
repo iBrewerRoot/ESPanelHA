@@ -91,6 +91,12 @@ void handleGetEntities(AsyncWebServerRequest *req) {
     req->send(200, "application/json", callbacks.entitiesCatalogJson());
 }
 
+void handleGetDevice(AsyncWebServerRequest *req) {
+    if (!requireAuth(req)) return;
+    // Board geometry + style tokens for the WYSIWYG editor preview.
+    req->send(200, "application/json", callbacks.deviceSpecJson());
+}
+
 void handleGetLayout(AsyncWebServerRequest *req) {
     if (!requireAuth(req)) return;
     core::Layout layout = callbacks.currentLayout();
@@ -150,7 +156,7 @@ void handlePostLayout(AsyncWebServerRequest *req, JsonVariant &json) {
             if (tileCount++ >= core::kMaxTilesPerPage) break;
             core::LayoutTile tile;
             tile.entityId = t["id"].as<String>();
-            tile.label = t["label"].as<String>();
+            tile.label = t["label"] | "";  // "" on missing key (web omits empty labels)
             tile.w = t["w"] | 1;
             tile.h = t["h"] | 1;
             if (tile.w < 1 || tile.w > 2) tile.w = 1;
@@ -261,9 +267,16 @@ void configPortalBegin(const ConfigPortalCallbacks &cb, const PortalAuth &auth) 
         sendGzip(req, "application/javascript", kAppJsGz, kAppJsGzLen);
     });
 
+    // Generated MDI icon sprite (gzip): injected by the editor for faithful icons.
+    server.on("/mdi-sprite.svg", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (!requireAuth(req)) return;
+        sendGzip(req, "image/svg+xml", kMdiSpriteGz, kMdiSpriteGzLen);
+    });
+
     // REST: reads.
     server.on("/api/config", HTTP_GET, handleGetConfig);
     server.on("/api/entities", HTTP_GET, handleGetEntities);
+    server.on("/api/device", HTTP_GET, handleGetDevice);
     server.on("/api/layout", HTTP_GET, handleGetLayout);
 
     // REST: writes (JSON bodies, buffered + size-capped by the handler).

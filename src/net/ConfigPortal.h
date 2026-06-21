@@ -22,8 +22,11 @@ struct ConfigPortalCallbacks {
     std::function<core::HAConfig()> currentHa;
     // New HA settings on save (persist + (re)connect).
     std::function<void(core::HAConfig)> onSaveHa;
-    // Whole selectable-entity catalog as a JSON array string [{id,name,domain}].
+    // Whole selectable-entity catalog as a JSON array string [{id,name,domain,icon}].
     std::function<String()> entitiesCatalogJson;
+    // Device dashboard spec (screen geometry + style tokens) as a JSON object, so
+    // the web editor draws a board-accurate, pixel-faithful WYSIWYG preview.
+    std::function<String()> deviceSpecJson;
     // Current dashboard layout (to populate the editor).
     std::function<core::Layout()> currentLayout;
     // New layout on save (persist + rebuild the on-screen dashboard).

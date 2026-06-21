@@ -19,7 +19,7 @@ bool EntityStore::domainAllowed(const String &domain) const {
 
 void EntityStore::beginCatalog() {
     catalogJson_ = "[";
-    catalogJson_.reserve(20000);  // one contiguous block -> low heap fragmentation
+    catalogJson_.reserve(24000);  // one contiguous block -> low heap fragmentation
     catalogOpen_ = true;
     catalogFirst_ = true;
     entities_.clear();  // rebuilt for the current interest set during the snapshot
@@ -37,6 +37,7 @@ bool EntityStore::ingest(const EntityState &e) {
         d["id"] = e.entityId;
         d["name"] = e.friendlyName.length() ? e.friendlyName : e.entityId;
         d["domain"] = domain;
+        if (e.icon.length()) d["icon"] = e.icon;  // real HA icon -> faithful preview
         String one;
         serializeJson(d, one);
         catalogJson_ += one;

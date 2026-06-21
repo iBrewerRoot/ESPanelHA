@@ -9,6 +9,7 @@
  * with no blocking calls, portable to the single-core C6 and the dual-core S3.
  */
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <WiFi.h>
 #include <lvgl.h>
 
@@ -24,6 +25,7 @@
 #include "net/Storage.h"
 #include "net/WifiProvisioning.h"
 #include "ui/UiManager.h"
+#include "ui/UiTheme.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -110,6 +112,53 @@ void startHomeAssistant() {
     g_haStarted = true;
 }
 
+// Serialize the device dashboard spec (geometry + style) for the web editor's
+// WYSIWYG preview. Built here (composition root) so ui/ stays JSON-free; colors
+// are emitted as "#rrggbb" for direct CSS use.
+String deviceSpecJson() {
+    const ui::DashboardSpec &s = ui::dashboardSpec();
+    auto hex = [](uint32_t c) {
+        char b[8];
+        snprintf(b, sizeof(b), "#%06X", (unsigned)(c & 0xFFFFFF));
+        return String(b);
+    };
+    JsonDocument doc;
+    doc["board"] = s.boardName;
+    doc["screenW"] = s.screenW;
+    doc["screenH"] = s.screenH;
+    doc["gridCols"] = s.gridCols;
+    doc["rowHeightPx"] = s.rowHeightPx;
+    doc["colGapPx"] = s.colGapPx;
+    doc["rowGapPx"] = s.rowGapPx;
+    doc["pagePadPx"] = s.pagePadPx;
+    doc["pageTitleGapPx"] = s.pageTitleGapPx;
+    doc["topBarHeightPx"] = s.topBarHeightPx;
+    doc["dotsBarHeightPx"] = s.dotsBarHeightPx;
+    doc["tileRadiusPx"] = s.tileRadiusPx;
+    doc["tilePadPx"] = s.tilePadPx;
+    doc["tileGapPx"] = s.tileGapPx;
+    doc["iconSizePx"] = s.iconSizePx;
+    doc["nameFontPx"] = s.nameFontPx;
+    doc["stateFontPx"] = s.stateFontPx;
+    doc["titleFontPx"] = s.titleFontPx;
+    doc["sliderHeightPx"] = s.sliderHeightPx;
+    doc["valueFontSmallPx"] = s.valueFontSmallPx;
+    doc["valueFontMedPx"] = s.valueFontMedPx;
+    doc["valueFontLargePx"] = s.valueFontLargePx;
+    doc["screenBg"] = hex(s.screenBg);
+    doc["tileBg"] = hex(s.tileBg);
+    doc["pressedBg"] = hex(s.pressedBg);
+    doc["iconOff"] = hex(s.iconOff);
+    doc["amber"] = hex(s.amber);
+    doc["primary"] = hex(s.primary);
+    doc["textMuted"] = hex(s.textMuted);
+    doc["nameColor"] = hex(s.nameColor);
+    doc["activeMix"] = s.activeMix;
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
 void startConfigPortal() {
     net::ConfigPortalCallbacks cb;
     cb.currentHa = []() { return g_cfg.ha; };
@@ -120,6 +169,7 @@ void startConfigPortal() {
     // Whole selectable-entity catalog as one JSON blob; the web editor caches it
     // and filters client-side (no per-keystroke device work, no big RAM list).
     cb.entitiesCatalogJson = []() { return g_store.catalogJson(); };
+    cb.deviceSpecJson = []() { return deviceSpecJson(); };
     cb.currentLayout = []() { return g_cfg.layout; };
     cb.onSaveLayout = [](core::Layout layout) {
         g_pendingLayout = std::move(layout);
@@ -171,12 +221,13 @@ void setup() {
 
 // Pick the screen to show based on what is configured.
 void refreshScreen(const String &ip) {
+    ui::uiSetPortalUrl(ip);                  // keep the settings screen's URL current
     if (!g_cfg.ha.isComplete()) {
         ui::uiShowConfigureHa(ip);          // need HA host/token
     } else if (g_cfg.layout.empty()) {
-        ui::uiShowConnected(ip);            // need to pick entities
+        ui::uiShowSettings();               // no dashboard yet -> settings/info page
     } else {
-        rebuildDashboard();                 // ready
+        rebuildDashboard();                 // ready (swipe down for settings)
     }
 }
 
@@ -207,6 +258,13 @@ void loop() {
     // Running.
     net::configPortalLoop();  // services the deferred reboot after an OTA upload
     if (g_haStarted) g_client.loop();
+
+    // Refresh the settings-menu WiFi-to-AP signal indicator (throttled, cheap).
+    static uint32_t lastWifiPush = 0;
+    if (millis() - lastWifiPush > 3000) {
+        lastWifiPush = millis();
+        ui::uiSetWifiStatus(WiFi.isConnected(), WiFi.RSSI());
+    }
 
     if (g_pendingHaApply) {
         g_pendingHaApply = false;
