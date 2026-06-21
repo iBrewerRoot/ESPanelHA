@@ -1,10 +1,12 @@
 <div align="center">
 
 <!-- 📌 LOGO: drop an image at docs/media/logo.png (~120px square), then uncomment:
-<img src="docs/media/logo.png" alt="ESP32 HA Control Panel logo" width="120" />
+<img src="docs/media/logo.png" alt="ESPanelHA logo" width="120" />
 -->
 
-# 📟 ESP32 Home Assistant Control Panel
+# 📟 ESPanelHA
+
+### ESP32 AMOLED touch panel for Home Assistant
 
 **Turn a Waveshare AMOLED touch display into a polished, real‑time Home Assistant wall panel.**
 
