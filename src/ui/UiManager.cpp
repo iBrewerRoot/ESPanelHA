@@ -421,10 +421,13 @@ void updateChrome() {
     }
     for (size_t i = 0; i < pageDots.size(); i++) {
         const bool on = (int)i == currentPage;
+        // Fully opaque (no LV_OPA_50): a semi-transparent fill re-blends over the
+        // partial buffer on every swipe and the dots visibly accumulate/degrade.
         lv_obj_set_style_bg_color(pageDots[i],
             lv_color_hex(on ? kPrimary : kIconOff), 0);
-        lv_obj_set_style_bg_opa(pageDots[i], on ? LV_OPA_COVER : LV_OPA_50, 0);
+        lv_obj_set_style_bg_opa(pageDots[i], LV_OPA_COVER, 0);
     }
+    if (dotsCont) lv_obj_invalidate(dotsCont);  // clean repaint after a page change
 }
 
 // Force a clean full repaint of the page area while scrolling. The partial
@@ -433,6 +436,13 @@ void updateChrome() {
 // step repaints the whole visible area.
 void onContentScroll(lv_event_t *) {
     if (tileview) lv_obj_invalidate(tileview);
+}
+
+// While the tileview animates between pages, repaint the bottom dots each frame
+// so the partial render buffer doesn't smear them (they otherwise only reset on
+// a full-screen reload, e.g. opening the settings menu).
+void onTileviewScroll(lv_event_t *) {
+    if (dotsCont) lv_obj_invalidate(dotsCont);
 }
 
 // Realize one page's grid of tiles into its tileview tile.
@@ -802,6 +812,7 @@ void uiShowDashboard(const core::Layout &newLayout, const ha::EntityStore &store
     lv_obj_set_style_border_width(tileview, 0, 0);
     lv_obj_set_scrollbar_mode(tileview, LV_SCROLLBAR_MODE_OFF);  // dots replace the bar
     lv_obj_add_event_cb(tileview, onPageChange, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(tileview, onTileviewScroll, LV_EVENT_SCROLL, nullptr);
 
     for (size_t i = 0; i < layout.pages.size(); i++) {
         lv_obj_t *t = lv_tileview_add_tile(tileview, (uint8_t)i, 0, LV_DIR_HOR);
