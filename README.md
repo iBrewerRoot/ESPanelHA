@@ -112,7 +112,7 @@ pio run -e c6_amoled_18 -t upload
 
 ## 📲 First‑time setup
 
-1. On first boot the screen shows **“Setup required”** and the board opens a WiFi access point: **`HA‑Panel‑Setup`**.
+1. On first boot the screen shows **“Setup required”** and the board opens a WiFi access point: **`ESPanelHA‑Setup`**.
 2. Connect to it — the captive portal opens. Enter your WiFi, then your Home Assistant **host/IP**, **port**, a **long‑lived access token**, and tick **“Use HTTPS/WSS (TLS)”** if HA is exposed over HTTPS.
    _(Token: HA profile → Long‑lived access tokens → Create token.)_
 3. The panel connects to HA and discovers `light` / `switch` / `sensor` entities.

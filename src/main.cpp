@@ -1,5 +1,5 @@
 /**
- * ESP32 Home Assistant Control Panel — application entry point.
+ * ESPanelHA — application entry point.
  *
  * Boot flow:
  *   HAL (display+touch) -> UI -> storage -> WiFi/HA provisioning ->

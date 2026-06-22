@@ -13,7 +13,7 @@
 namespace net {
 
 namespace {
-constexpr const char *kApName = "HA-Panel-Setup";
+constexpr const char *kApName = "ESPanelHA-Setup";
 
 // These must persist for the whole portal lifetime (non-blocking mode keeps
 // referencing them from wifiLoop), so they are file-static, not locals.

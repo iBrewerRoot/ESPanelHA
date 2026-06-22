@@ -1,7 +1,7 @@
 {
   "name": "ESPanelHA",
   "short_name": "ESPanelHA",
-  "description": "ESP32 Home Assistant Control Panel",
+  "description": "ESP32 AMOLED touch panel for Home Assistant",
   "icons": [
     {
       "src": "/icon-192.png",

@@ -1,4 +1,4 @@
-/* HA Control Panel — config SPA (vanilla JS, no framework so it gzips small).
+/* ESPanelHA — config SPA (vanilla JS, no framework so it gzips small).
    The dashboard editor is a WYSIWYG: the canvas is a scaled, pixel-faithful
    replica of the device screen (geometry from /api/device), tiles render like
    the device (real MDI icon + accent + ellipsis name + state line), so building

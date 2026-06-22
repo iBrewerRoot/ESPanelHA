@@ -177,6 +177,50 @@ lv_obj_t *makeScreen() {
     return s;
 }
 
+// Compact ESPanelHA brand mark: a blue rounded badge with an amber bulb glyph
+// next to the two-tone "ESPanelHA" wordmark. Drawn with LVGL primitives (no
+// embedded image), so it costs ~no flash and rotates with the screen.
+lv_obj_t *makeBrand(lv_obj_t *parent) {
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 12, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *badge = lv_obj_create(row);
+    lv_obj_remove_style_all(badge);
+    lv_obj_set_size(badge, 56, 56);
+    lv_obj_set_style_radius(badge, 14, 0);
+    lv_obj_set_style_bg_color(badge, lv_color_hex(0x2BB2EE), 0);  // brand blue
+    lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *inner = lv_obj_create(badge);
+    lv_obj_remove_style_all(inner);
+    lv_obj_set_size(inner, 44, 44);
+    lv_obj_center(inner);
+    lv_obj_set_style_radius(inner, 10, 0);
+    lv_obj_set_style_bg_color(inner, lv_color_hex(0x0e1b27), 0);  // dark inset
+    lv_obj_set_style_bg_opa(inner, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(inner, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *bulb = lv_label_create(inner);
+    lv_obj_set_style_text_font(bulb, &mdi_font, 0);
+    lv_obj_set_style_text_color(bulb, lv_color_hex(0xF3C310), 0);  // amber bulb
+    lv_label_set_text(bulb, MDI_LIGHTBULB);
+    lv_obj_center(bulb);
+
+    lv_obj_t *wm = lv_label_create(row);
+    lv_label_set_recolor(wm, true);
+    lv_obj_set_style_text_font(wm, fontForPx(32), 0);
+    lv_obj_set_style_text_color(wm, lv_color_hex(0xffffff), 0);
+    lv_label_set_text(wm, "ESPanel#2BB2EE HA#");  // "HA" tinted brand blue
+    return row;
+}
+
 // Sensors are display-only; light/switch react to a tap.
 bool isControllable(const String &domain) {
     return domain == "light" || domain == "switch";
@@ -659,10 +703,7 @@ void uiInit() {
     lv_obj_set_flex_align(screenSetup, LV_FLEX_ALIGN_SPACE_EVENLY,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *setupTitle = lv_label_create(screenSetup);
-    lv_label_set_text(setupTitle, "Setup required");
-    lv_obj_set_style_text_color(setupTitle, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(setupTitle, fontForPx(40), 0);
+    makeBrand(screenSetup);
 
     setupLabel = lv_label_create(screenSetup);
     lv_obj_set_width(setupLabel, lv_pct(100));
@@ -685,10 +726,7 @@ void uiInit() {
     lv_obj_set_flex_align(screenInfo, LV_FLEX_ALIGN_SPACE_EVENLY,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *infoTitle = lv_label_create(screenInfo);
-    lv_label_set_text(infoTitle, "Connected");
-    lv_obj_set_style_text_color(infoTitle, lv_color_hex(0x4caf50), 0);
-    lv_obj_set_style_text_font(infoTitle, fontForPx(40), 0);
+    makeBrand(screenInfo);
 
     infoBodyLabel = lv_label_create(screenInfo);
     lv_obj_set_width(infoBodyLabel, lv_pct(100));
