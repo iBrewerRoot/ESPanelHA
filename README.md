@@ -33,7 +33,8 @@ WiFi + HA onboarding, automatic entity discovery, a WYSIWYG web editor to design
 - ⚡ **Real‑time control** over Home Assistant's **native WebSocket API**. Tap a tile and HA reacts instantly; changes made elsewhere reflect on screen.
 - 🔍 **Automatic entity discovery** — lights, switches and sensors show up on their own.
 - 🖱️ **WYSIWYG web editor** — design multi‑page screens from your browser; the canvas is a pixel‑faithful, drag‑and‑drop replica of the actual panel.
-- 📱 **Swipeable multi‑page dashboard** and a pull‑down **settings menu**.
+- 📱 **Swipeable multi‑page dashboard** and a pull‑down **settings menu** with quick‑settings tiles.
+- 🔁 **Orientation & adaptive grid** — pick any of the **4 screen orientations** (portrait or landscape for wall mounting), rotate it **live** from the settings menu or **auto‑rotate via the motion sensor (IMU)**; the grid's **column count is configurable per orientation**, capped to what the panel size allows.
 - 🧩 **Multi‑board HAL** — the same app runs across different Waveshare panels; only a board profile changes.
 - 🔐 **`ws://` or `wss://` (TLS)** — insecure TLS mode for trusted LANs, self‑signed HA certs and Nabu Casa.
 - 🔄 **Browser OTA updates** from the config portal.
@@ -66,6 +67,8 @@ WiFi + HA onboarding, automatic entity discovery, a WYSIWYG web editor to design
 
 - Pins, controllers and the I/O‑expander mapping are **verified against Waveshare's official demo code** (`pin_config.h` + GFX examples). The S3 and C6 1.8" boards differ on **both** controllers (display *and* touch) and on pinout — the HAL absorbs this through per‑board profiles.
 - Screen/touch **reset is not on a GPIO** but on a **TCA9554** I/O expander (@0x20, EXIO 0/1/2, shared I²C bus). [`Tca9554`](src/board/io/Tca9554.h) issues the reset sequence before panel init ([`Display.cpp`](src/board/Display.cpp) → `resetPanel()`).
+- The S3 1.8" carries a **QMI8658** 6‑axis IMU (@0x6B, shared I²C bus) used for **auto‑rotation** ([`Imu.cpp`](src/board/Imu.cpp)). It's board‑gated (`BOARD_HAS_IMU`): boards without a sensor compile to no‑op stubs and simply hide the auto‑rotate control.
+- These QSPI AMOLED controllers **don't support hardware rotation** (the driver only flips axes), so the panel stays native and the firmware **rotates pixels in software** in the flush callback, with touch remapped to match. Flush areas are even‑aligned (the panels address pixels in pairs) to avoid shearing while scrolling in landscape.
 - ⚠️ A **v1** revision of the S3 1.8" uses SH8601 + FT3168 (@0x38). The boot‑time **I²C scan** (`-D DEBUG_I2C_SCAN`, on by default for S3) tells them apart: `0x15` ⇒ CST816 (current profile), `0x38` ⇒ FT3168 (switch `DISPLAY_DRIVER_*` and `TOUCH_I2C_ADDR`).
 
 </details>
@@ -114,13 +117,15 @@ pio run -e c6_amoled_18 -t upload
    _(Token: HA profile → Long‑lived access tokens → Create token.)_
 3. The panel connects to HA and discovers `light` / `switch` / `sensor` entities.
 4. Open **`http://<panel-ip>/`** to design your screens in the web editor (pick entities, arrange tiles, set sizes and labels).
-5. Save — the dashboard appears. Toggles and sliders drive HA in real time; pull **down** for the settings menu.
+5. Save — the dashboard appears. Toggles and sliders drive HA in real time; pull **down** for the settings menu (rotate the screen, toggle IMU auto‑rotate).
 
 ---
 
 ## 🎛️ Web editor
 
 The config portal hosts a **WYSIWYG** dashboard editor: the canvas is a scaled, pixel‑faithful replica of the device screen that adapts to each board's resolution. Click an entity to place it, drag tiles to reorder (with a live ghost + re‑pack), pick tile sizes (1×1 / 2×1 / 1×2 / 2×2), set per‑tile labels, and manage swipe pages — all rendered exactly as the panel will show them, even offline in AP mode.
+
+A **Display** card in *Settings* sets the **orientation** and the **column count per orientation** (bounded by the auto‑detected maximum), plus the IMU auto‑rotate toggle. The preview rotates and re‑flows to match, so the editor always mirrors the live screen.
 
 ---
 
@@ -153,6 +158,7 @@ To add an icon, append its MDI name to [`scripts/mdi-font/icons.txt`](scripts/md
 ## 🗺️ Roadmap
 
 - ✅ **MVP** — lights (on/off + brightness), switches, and sensors (read‑only); real‑time WebSocket; multi‑page WYSIWYG editor; settings menu; OTA.
+- ✅ **Orientation & adaptive grid** — 4 orientations, live rotation, IMU auto‑rotate, configurable columns per orientation.
 - 🔭 **Next** — color picker for RGB lights, scenes & scripts, more settings‑menu controls, additional Waveshare panels, single‑TLS refactor & portal auth hardening.
 
 ---
