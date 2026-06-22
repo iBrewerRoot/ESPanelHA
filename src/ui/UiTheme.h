@@ -55,6 +55,20 @@ inline int valueFontFor(const DashboardSpec &s, int w, int h) {
     return s.valueFontSmallPx;
 }
 
+// Smallest sensible on-screen tile width. The maximum column count offered for a
+// given screen width is derived from this, so larger panels naturally allow more
+// columns (368 px -> 2, 448 px -> 3, ...). Tunable.
+constexpr int kMinTileWidthPx = 130;
+
+/** Max columns that fit `widthPx` at the spec's page padding / column gap,
+ *  capped at `cap`. Used both to bound the settings UI and to size the grid. */
+inline int maxColsForWidth(const DashboardSpec &s, int widthPx, int cap) {
+    int cols = (widthPx - 2 * s.pagePadPx + s.colGapPx) / (kMinTileWidthPx + s.colGapPx);
+    if (cols < 1) cols = 1;
+    if (cols > cap) cols = cap;
+    return cols;
+}
+
 } // namespace ui
 
 #endif /* UI_UI_THEME_H */

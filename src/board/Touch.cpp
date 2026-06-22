@@ -11,6 +11,20 @@ namespace hal {
 namespace {
 
 ITouch *touch = nullptr;
+uint8_t touchRotation = 0;  // mirrors the display rotation (0..3)
+
+// Map a raw touch point (reported in the panel's native portrait orientation) to
+// the current logical orientation. This is the exact inverse of the software
+// rotation applied in Display::flushCb, so touch and pixels stay aligned.
+void applyRotation(int16_t &x, int16_t &y) {
+    const int16_t rx = x, ry = y;
+    switch (touchRotation) {
+        case 1:  x = ry;                       y = (SCREEN_WIDTH - 1) - rx;  break;
+        case 2:  x = (SCREEN_WIDTH - 1) - rx;  y = (SCREEN_HEIGHT - 1) - ry; break;
+        case 3:  x = (SCREEN_HEIGHT - 1) - ry; y = rx;                       break;
+        default: /* 0: native portrait */                                    break;
+    }
+}
 
 #if defined(TOUCH_DRIVER_CAP)
 /**
@@ -58,6 +72,7 @@ ITouch *makeTouch() {
 void readCb(lv_indev_drv_t *, lv_indev_data_t *data) {
     int16_t x = 0, y = 0;
     if (touch && touch->read(x, y)) {
+        applyRotation(x, y);
         data->state = LV_INDEV_STATE_PRESSED;
         data->point.x = x;
         data->point.y = y;
@@ -67,6 +82,8 @@ void readCb(lv_indev_drv_t *, lv_indev_data_t *data) {
 }
 
 } // namespace
+
+void touchSetRotation(uint8_t rotation) { touchRotation = rotation & 0x03; }
 
 void touchInit() {
     touch = makeTouch();

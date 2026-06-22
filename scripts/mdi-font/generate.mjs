@@ -84,6 +84,28 @@ const lvArgs = [
 console.log(`Converting ${icons.length} glyphs at ${FONT_SIZE}px...`);
 execFileSync("npx", lvArgs, { stdio: "inherit", cwd: __dirname, shell: process.platform === "win32" });
 
+// Larger MDI subset for the on-screen quick-settings tiles (same glyphs, bigger
+// render) so settings icons read clearly without enlarging the dashboard font.
+const BIG_FONT_SIZE = 64;
+const BIG_NAMES = ["rotate-right", "screen-rotation"];
+const bigIcons = BIG_NAMES.map((n) => ({ name: n, cp: map.get(n) })).filter((i) => i.cp != null);
+if (bigIcons.length) {
+  const bigRanges = bigIcons.map((i) => "0x" + i.cp.toString(16).toUpperCase());
+  const bigArgs = [
+    "lv_font_conv",
+    "--font", ttf,
+    "--size", String(BIG_FONT_SIZE),
+    "--bpp", String(BPP),
+    "--format", "lvgl",
+    "--lv-font-name", "mdi_font_lg",
+    "--no-compress",
+    "-o", join(outFontDir, "mdi_font_lg.c"),
+    "-r", bigRanges.join(","),
+  ];
+  console.log(`Converting ${bigIcons.length} large glyphs at ${BIG_FONT_SIZE}px...`);
+  execFileSync("npx", bigArgs, { stdio: "inherit", cwd: __dirname, shell: process.platform === "win32" });
+}
+
 // --- UTF-8 encode a codepoint ------------------------------------------------
 function utf8Bytes(cp) {
   const b = Buffer.from(String.fromCodePoint(cp), "utf8");
@@ -109,6 +131,7 @@ let h = `/*
 #include <lvgl.h>
 
 LV_FONT_DECLARE(mdi_font);
+LV_FONT_DECLARE(mdi_font_lg);  /* larger subset for on-screen settings tiles */
 
 #ifdef __cplusplus
 extern "C" {

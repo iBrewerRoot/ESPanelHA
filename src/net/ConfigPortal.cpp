@@ -159,7 +159,7 @@ void handlePostLayout(AsyncWebServerRequest *req, JsonVariant &json) {
             tile.label = t["label"] | "";  // "" on missing key (web omits empty labels)
             tile.w = t["w"] | 1;
             tile.h = t["h"] | 1;
-            if (tile.w < 1 || tile.w > 2) tile.w = 1;
+            if (tile.w < 1 || tile.w > core::kMaxGridCols) tile.w = 1;
             if (tile.h < 1 || tile.h > 2) tile.h = 1;
             if (tile.entityId.length()) page.tiles.push_back(tile);
         }
@@ -175,6 +175,24 @@ void handlePostAuth(AsyncWebServerRequest *req, JsonVariant &json) {
     String user = json["user"].as<String>();
     String password = json["password"].as<String>();  // may be empty (keep hash)
     callbacks.onSaveAuth(enabled, user, password);
+    req->send(200, "application/json", "{\"ok\":true}");
+}
+
+void handlePostDisplay(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    JsonObject o = json.as<JsonObject>();
+    core::DisplayConfig d = callbacks.currentDisplay();  // keep fields not re-sent
+    if (o["rotation"].is<int>()) d.rotation = (uint8_t)o["rotation"].as<int>() & 0x03;
+    if (o["autoRotate"].is<bool>()) d.autoRotate = o["autoRotate"].as<bool>();
+    if (o["colsPortrait"].is<int>()) d.colsPortrait = (uint8_t)o["colsPortrait"].as<int>();
+    if (o["colsLandscape"].is<int>()) d.colsLandscape = (uint8_t)o["colsLandscape"].as<int>();
+    auto clampCols = [](uint8_t c) -> uint8_t {
+        if (c < 1) return 1;
+        return c > core::kMaxGridCols ? core::kMaxGridCols : c;
+    };
+    d.colsPortrait = clampCols(d.colsPortrait);
+    d.colsLandscape = clampCols(d.colsLandscape);
+    callbacks.onSaveDisplay(d);
     req->send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -319,6 +337,9 @@ void configPortalBegin(const ConfigPortalCallbacks &cb, const PortalAuth &auth) 
     auto *authH = new AsyncCallbackJsonWebHandler("/api/auth", handlePostAuth);
     authH->setMaxContentLength(kMaxBodyBytes);
     server.addHandler(authH);
+    auto *dispH = new AsyncCallbackJsonWebHandler("/api/config/display", handlePostDisplay);
+    dispH->setMaxContentLength(kMaxBodyBytes);
+    server.addHandler(dispH);
 
     server.on("/api/reset", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!requireAuth(req)) return;

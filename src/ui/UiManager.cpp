@@ -15,7 +15,10 @@ namespace ui {
 // below reads from this, and the config portal serves the same values as JSON,
 // so the browser preview stays pixel-faithful to the device.
 const DashboardSpec &dashboardSpec() {
-    static const DashboardSpec spec = {
+    // Mutable so orientation/column changes can be applied in place: the object
+    // never moves, so the cached `S` reference below stays valid and sees the
+    // updated screenW/H/gridCols (the web editor reads the same values via JSON).
+    static DashboardSpec spec = {
         /* boardName */         BOARD_NAME,
         /* screenW/H */         SCREEN_WIDTH, SCREEN_HEIGHT,
         /* gridCols */          2,
@@ -77,8 +80,16 @@ String settingsUrl;
 lv_obj_t *screenMenu = nullptr;
 lv_obj_t *menuWifiIcon = nullptr;   // WiFi-to-AP signal indicator (top-left)
 lv_obj_t *menuConnIcon = nullptr;   // HA status badge (kept in sync with connIcon)
-lv_obj_t *menuPanel = nullptr;      // lighter surface for future setting buttons
+lv_obj_t *menuPanel = nullptr;      // lighter surface holding the quick-settings tiles
 lv_obj_t *menuIpLabel = nullptr;    // portal URL, at the bottom
+lv_obj_t *autoRotTile = nullptr;    // IMU auto-rotate quick tile (only if BOARD_HAS_IMU)
+lv_obj_t *autoRotIcon = nullptr;    // its glyph (recolored to show on/off)
+lv_obj_t *autoRotCap = nullptr;     // its caption (recolored with the glyph)
+bool autoRotateOn = false;          // remembered across UI rebuilds
+
+// Last HA-status badge color, remembered so a UI rebuild (orientation change)
+// restores it instead of reverting to the grey default until the next status event.
+uint32_t lastConnColor = S.iconOff;
 
 // Dashboard top/bottom chrome (persistent across page swipes).
 lv_obj_t *connIcon = nullptr;             // HA status badge, top-right corner
@@ -93,6 +104,7 @@ int currentPage = -1;
 core::Layout layout;                      // copy kept to build pages on demand
 const ha::EntityStore *entityStore = nullptr;
 std::vector<lv_coord_t> rowDsc;           // grid row template for the live page
+std::vector<lv_coord_t> colDsc;           // grid column template (S.gridCols wide)
 
 /* Geometry + palette: aliased from the shared DashboardSpec so the device and
  * the web preview can never drift (single source of truth in dashboardSpec()). */
@@ -273,36 +285,39 @@ void onSliderEvent(lv_event_t *e) {
     }
 }
 
-// Where a tile sits on the 2-column grid.
+// Where a tile sits on the grid (col/w in [0, S.gridCols]).
 struct Placement {
     uint8_t col, row, w, h;
 };
 
-// First-fit packing of variable-span tiles onto a 2-column grid. Returns the
-// total number of rows used; fills `out` with one placement per tile (in order).
+// First-fit packing of variable-span tiles onto an S.gridCols-wide grid. Returns
+// the total number of rows used; fills `out` with one placement per tile (in
+// order). A tile's column span is clamped to the current column count, so a
+// layout authored for more columns still fits a narrower orientation.
 int packTiles(const std::vector<core::LayoutTile> &tiles, std::vector<Placement> &out) {
-    std::vector<std::vector<bool>> occ;  // occ[row][col], col in {0,1}
+    const int cols = S.gridCols;
+    std::vector<std::vector<bool>> occ;  // occ[row][col], col in [0, cols)
     auto isFree = [&](int r, int c, int w, int h) {
         for (int dr = 0; dr < h; dr++) {
             for (int dc = 0; dc < w; dc++) {
                 const int rr = r + dr, cc = c + dc;
-                if (cc >= 2) return false;
+                if (cc >= cols) return false;
                 if (rr < (int)occ.size() && occ[rr][cc]) return false;
             }
         }
         return true;
     };
     for (const auto &t : tiles) {
-        const int w = t.w < 1 ? 1 : (t.w > 2 ? 2 : t.w);
+        const int w = t.w < 1 ? 1 : (t.w > cols ? cols : t.w);
         const int h = t.h < 1 ? 1 : (t.h > 2 ? 2 : t.h);
         int pr = 0, pc = 0;
         bool placed = false;
         for (int r = 0; !placed && r < 256; r++) {
-            for (int c = 0; c + w <= 2; c++) {
+            for (int c = 0; c + w <= cols; c++) {
                 if (isFree(r, c, w, h)) { pr = r; pc = c; placed = true; break; }
             }
         }
-        while ((int)occ.size() < pr + h) occ.push_back({false, false});
+        while ((int)occ.size() < pr + h) occ.push_back(std::vector<bool>(cols, false));
         for (int dr = 0; dr < h; dr++) {
             for (int dc = 0; dc < w; dc++) occ[pr + dr][pc + dc] = true;
         }
@@ -467,32 +482,39 @@ void buildPage(int idx) {
     int rows = packTiles(page.tiles, place);
     if (rows < 1) rows = 1;
 
-    // Center the content when it doesn't use the full grid: a lone tile centers
-    // on the screen, and a layout that only fills the left column centers that
-    // column. Otherwise the two columns stretch to fill the width as usual.
-    bool col1Used = false;
-    for (const auto &pl : place) if (pl.col + pl.w > 1) col1Used = true;
-    const bool singleColumn = !place.empty() && !col1Used;
+    // Center the content when it doesn't fill the whole grid (e.g. a 2-wide tile
+    // on a 3-column landscape grid, or a single narrow column): build only as many
+    // columns as are actually used, at the normal cell width, and center that
+    // block. Otherwise stretch FR columns to fill the width. A lone tile also
+    // centers vertically.
+    int usedCols = 1;
+    for (const auto &pl : place)
+        if (pl.col + pl.w > usedCols) usedCols = pl.col + pl.w;
+    if (usedCols > S.gridCols) usedCols = S.gridCols;
+    const bool centerCols = usedCols < S.gridCols;
     const bool singleTile = place.size() == 1;
     const lv_coord_t cellW =
-        (S.screenW - 2 * S.pagePadPx - S.colGapPx) / S.gridCols;  // one half-width cell
+        (S.screenW - 2 * S.pagePadPx - (S.gridCols - 1) * S.colGapPx) / S.gridCols;
 
-    static lv_coord_t colFull[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
-    static lv_coord_t colOne[] = {0, LV_GRID_TEMPLATE_LAST};
-    colOne[0] = cellW;
+    colDsc.clear();
+    if (centerCols)
+        for (int i = 0; i < usedCols; i++) colDsc.push_back(cellW);  // fixed cells -> centered
+    else
+        for (int i = 0; i < S.gridCols; i++) colDsc.push_back(LV_GRID_FR(1));
+    colDsc.push_back(LV_GRID_TEMPLATE_LAST);
     rowDsc.clear();
     for (int i = 0; i < rows; i++) rowDsc.push_back(kRowH);
     rowDsc.push_back(LV_GRID_TEMPLATE_LAST);
 
-    lv_obj_set_grid_dsc_array(content, singleColumn ? colOne : colFull, rowDsc.data());
+    lv_obj_set_grid_dsc_array(content, colDsc.data(), rowDsc.data());
     lv_obj_set_layout(content, LV_LAYOUT_GRID);
     lv_obj_set_style_pad_row(content, S.rowGapPx, 0);
     lv_obj_set_style_pad_column(content, S.colGapPx, 0);
-    // Track distribution: START fills normally (FR columns); CENTER only when we
-    // intentionally center a lone tile / single column. (STRETCH is not a valid
-    // track-align value and corrupts FR sizing — use START.)
+    // Track distribution: START fills normally (FR columns); CENTER only when the
+    // used columns are narrower than the grid. (STRETCH is not a valid track-align
+    // value and corrupts FR sizing — use START.)
     lv_obj_set_grid_align(content,
-                          singleColumn ? LV_GRID_ALIGN_CENTER : LV_GRID_ALIGN_START,
+                          centerCols ? LV_GRID_ALIGN_CENTER : LV_GRID_ALIGN_START,
                           singleTile ? LV_GRID_ALIGN_CENTER : LV_GRID_ALIGN_START);
 
     for (size_t i = 0; i < page.tiles.size(); i++) {
@@ -559,6 +581,66 @@ void onMenuGesture(lv_event_t *) {
         lv_scr_load_anim(screenDash, LV_SCR_LOAD_ANIM_OUT_TOP, 250, 0, false);
     }
 }
+
+// Quick-settings tile: a rounded icon button with a short caption underneath,
+// like an Android/iOS quick-settings toggle. Sized so three fit per row on the
+// 1.8" panel in portrait. Returns the tile; *iconOut / *capOut expose the glyph
+// and caption so callers can recolor them (toggle state).
+lv_obj_t *makeQuickTile(lv_obj_t *parent, const char *glyph, const char *caption,
+                        lv_obj_t **iconOut, lv_obj_t **capOut) {
+    lv_obj_t *tile = lv_obj_create(parent);
+    lv_obj_set_size(tile, 100, 100);
+    lv_obj_set_style_radius(tile, 18, 0);
+    lv_obj_set_style_bg_color(tile, lv_color_hex(kTileBg), 0);
+    lv_obj_set_style_bg_color(tile, lv_color_hex(S.pressedBg), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(tile, 0, 0);
+    lv_obj_set_style_pad_all(tile, 8, 0);
+    lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(tile, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(tile, 2, 0);
+    lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *icon = lv_label_create(tile);
+    lv_obj_set_style_text_font(icon, &mdi_font_lg, 0);  // bigger settings glyph
+    lv_obj_set_style_text_color(icon, lv_color_hex(S.nameColor), 0);
+    lv_label_set_text(icon, glyph);
+    if (iconOut) *iconOut = icon;
+
+    lv_obj_t *cap = lv_label_create(tile);
+    lv_obj_set_style_text_font(cap, fontForPx(14), 0);
+    lv_obj_set_style_text_color(cap, lv_color_hex(kTextMuted), 0);
+    lv_label_set_text(cap, caption);
+    if (capOut) *capOut = cap;
+    return tile;
+}
+
+// Reflect the auto-rotate state on its tile: accent fill + white glyph & caption
+// when on (the muted caption color is unreadable on the blue fill).
+void applyAutoRotVisual() {
+    if (!autoRotTile) return;
+    const lv_color_t fg = lv_color_hex(autoRotateOn ? 0xffffff : kIconOff);
+    lv_obj_set_style_bg_color(autoRotTile,
+        lv_color_hex(autoRotateOn ? kPrimary : kTileBg), 0);
+    if (autoRotIcon) lv_obj_set_style_text_color(autoRotIcon, fg, 0);
+    if (autoRotCap) lv_obj_set_style_text_color(autoRotCap,
+        autoRotateOn ? fg : lv_color_hex(kTextMuted), 0);
+}
+
+// "Rotate" tile: advance the orientation by 90° (app applies + persists).
+void onRotateBtn(lv_event_t *) {
+    if (actions.onCycleRotation) actions.onCycleRotation();
+}
+
+#if defined(BOARD_HAS_IMU)
+// "Auto" tile: toggle IMU-driven orientation.
+void onAutoRotTile(lv_event_t *) {
+    autoRotateOn = !autoRotateOn;
+    applyAutoRotVisual();
+    if (actions.onToggleAutoRotate) actions.onToggleAutoRotate(autoRotateOn);
+}
+#endif
 
 } // namespace
 
@@ -636,7 +718,7 @@ void uiInit() {
 
     connIcon = lv_label_create(topBar);
     lv_obj_set_style_text_font(connIcon, &mdi_font, 0);
-    lv_obj_set_style_text_color(connIcon, lv_color_hex(kIconOff), 0);
+    lv_obj_set_style_text_color(connIcon, lv_color_hex(lastConnColor), 0);
     lv_label_set_text(connIcon, MDI_HOME_ASSISTANT);
     lv_obj_align(connIcon, LV_ALIGN_RIGHT_MID, -14, 0);
 
@@ -716,7 +798,7 @@ void uiInit() {
 
     menuConnIcon = lv_label_create(menuBar);
     lv_obj_set_style_text_font(menuConnIcon, &mdi_font, 0);
-    lv_obj_set_style_text_color(menuConnIcon, lv_color_hex(kIconOff), 0);
+    lv_obj_set_style_text_color(menuConnIcon, lv_color_hex(lastConnColor), 0);
     lv_label_set_text(menuConnIcon, MDI_HOME_ASSISTANT);
     lv_obj_align(menuConnIcon, LV_ALIGN_RIGHT_MID, -14, 0);
 
@@ -731,9 +813,23 @@ void uiInit() {
     lv_obj_set_style_radius(menuPanel, 16, 0);
     lv_obj_set_style_border_width(menuPanel, 0, 0);
     lv_obj_set_style_pad_all(menuPanel, 12, 0);
-    lv_obj_set_flex_flow(menuPanel, LV_FLEX_FLOW_COLUMN);
+    // Quick-settings strip: a wrapping row of rounded icon tiles (Android/iOS
+    // quick-settings style), each an icon with a short caption underneath.
+    lv_obj_set_flex_flow(menuPanel, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(menuPanel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(menuPanel, 10, 0);
-    // (Setting buttons will be added here later.)
+    lv_obj_set_style_pad_column(menuPanel, 10, 0);
+
+    lv_obj_t *rotTile = makeQuickTile(menuPanel, MDI_ROTATE_RIGHT, "Rotate", nullptr, nullptr);
+    lv_obj_add_event_cb(rotTile, onRotateBtn, LV_EVENT_CLICKED, nullptr);
+
+#if defined(BOARD_HAS_IMU)
+    // Auto-rotate tile (IMU). Only built on boards with an orientation sensor.
+    autoRotTile = makeQuickTile(menuPanel, MDI_SCREEN_ROTATION, "Auto", &autoRotIcon, &autoRotCap);
+    lv_obj_add_event_cb(autoRotTile, onAutoRotTile, LV_EVENT_CLICKED, nullptr);
+    applyAutoRotVisual();
+#endif
 
     menuIpLabel = lv_label_create(screenMenu);
     lv_obj_set_style_text_color(menuIpLabel, lv_color_hex(kTextMuted), 0);
@@ -749,6 +845,35 @@ void uiInit() {
 }
 
 void uiSetActions(const Actions &a) { actions = a; }
+
+void uiSetDisplayConfig(const core::DisplayConfig &d) {
+    // Mutate the shared spec in place so the cached `S` reference (and the web
+    // editor, which reads the same values) sees the new geometry.
+    DashboardSpec &spec = const_cast<DashboardSpec &>(dashboardSpec());
+    const bool landscape = d.isLandscape();
+    spec.screenW = landscape ? SCREEN_HEIGHT : SCREEN_WIDTH;
+    spec.screenH = landscape ? SCREEN_WIDTH : SCREEN_HEIGHT;
+
+    int cols = landscape ? d.colsLandscape : d.colsPortrait;
+    const int maxCols = maxColsForWidth(spec, spec.screenW, core::kMaxGridCols);
+    if (cols < 1) cols = 1;
+    if (cols > maxCols) cols = maxCols;
+    spec.gridCols = cols;
+
+    autoRotateOn = d.autoRotate;
+    applyAutoRotVisual();
+}
+
+void uiApplyOrientation() {
+    // Free the dashboard's heap-owned ids + widgets, then delete every screen and
+    // rebuild them at the geometry uiSetDisplayConfig() just installed. uiInit()
+    // loads the boot screen; the caller re-shows the right screen afterwards.
+    clearDashboard();
+    lv_obj_t *old[] = {screenBoot, screenSetup, screenInfo,
+                       screenDash, screenSettings, screenMenu};
+    uiInit();
+    for (lv_obj_t *s : old) if (s) lv_obj_del(s);
+}
 
 void uiShowBoot(const String &message) {
     lv_label_set_text(bootLabel, message.c_str());
@@ -867,6 +992,7 @@ void uiSetConnectionStatus(const String &text) {
     if (text.indexOf("disconnected") >= 0 || text.indexOf("failed") >= 0) c = kStatusDown;
     else if (text.indexOf("connecting") >= 0 || text.indexOf("authenticating") >= 0) c = kAmber;
     else if (text.indexOf("connected") >= 0) c = kStatusOk;
+    lastConnColor = c;  // remembered so a UI rebuild can restore it
     if (connIcon) lv_obj_set_style_text_color(connIcon, lv_color_hex(c), 0);
     if (menuConnIcon) lv_obj_set_style_text_color(menuConnIcon, lv_color_hex(c), 0);
 }

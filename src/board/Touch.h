@@ -23,6 +23,11 @@ public:
 /** Build the board's touch driver and bind it to an LVGL indev. Call once. */
 void touchInit();
 
+/** Remap touch coordinates for the given display rotation (0..3). The controller
+ *  reports points in the panel's native (portrait) orientation, so they must be
+ *  transformed to match a rotated display. */
+void touchSetRotation(uint8_t rotation);
+
 } // namespace hal
 
 #endif /* HAL_TOUCH_H */

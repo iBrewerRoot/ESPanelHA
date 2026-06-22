@@ -43,7 +43,7 @@ void readLayoutFile(core::Layout &layout) {
             tile.label = jsonStr(t["label"]);
             tile.w = t["w"] | 1;
             tile.h = t["h"] | 1;
-            if (tile.w < 1 || tile.w > 2) tile.w = 1;
+            if (tile.w < 1 || tile.w > core::kMaxGridCols) tile.w = 1;
             if (tile.h < 1 || tile.h > 2) tile.h = 1;
             page.tiles.push_back(tile);
         }
@@ -100,6 +100,11 @@ void loadConfig(core::AppConfig &out) {
     out.auth.user = str("auth_user");
     out.auth.salt = str("auth_salt");
     out.auth.hash = str("auth_hash");
+
+    out.display.rotation = prefs.getUChar("disp_rot", 0) & 0x03;
+    out.display.autoRotate = prefs.getBool("disp_auto", false);
+    out.display.colsPortrait = prefs.getUChar("disp_colsp", 2);
+    out.display.colsLandscape = prefs.getUChar("disp_colsl", 3);
     prefs.end();
 
     if (LittleFS.exists(kLayoutPath)) {
@@ -155,6 +160,15 @@ void saveAuth(const core::AuthConfig &auth) {
     prefs.putString("auth_user", auth.user);
     prefs.putString("auth_salt", auth.salt);
     prefs.putString("auth_hash", auth.hash);
+    prefs.end();
+}
+
+void saveDisplayConfig(const core::DisplayConfig &display) {
+    prefs.begin(kNvsNamespace, false);
+    prefs.putUChar("disp_rot", display.rotation & 0x03);
+    prefs.putBool("disp_auto", display.autoRotate);
+    prefs.putUChar("disp_colsp", display.colsPortrait);
+    prefs.putUChar("disp_colsl", display.colsLandscape);
     prefs.end();
 }
 

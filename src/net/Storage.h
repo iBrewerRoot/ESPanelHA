@@ -22,6 +22,7 @@ void loadConfig(core::AppConfig &out);
 void saveHAConfig(const core::HAConfig &ha);   // token stored encrypted
 void saveLayout(const core::Layout &layout);   // clamped to core::kMax* caps
 void saveAuth(const core::AuthConfig &auth);
+void saveDisplayConfig(const core::DisplayConfig &display);  // orientation + columns
 
 /** Wipe all stored settings (factory reset). */
 void clearAll();

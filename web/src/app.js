@@ -20,6 +20,8 @@
     screenBg: "#101418", tileBg: "#1B2128", pressedBg: "#232B34", iconOff: "#5B6571",
     amber: "#FFC107", primary: "#03A9F4", textMuted: "#8AA0B2", nameColor: "#FFFFFF",
     activeMix: 60,
+    rotation: 0, autoRotate: false, hasImu: false,
+    colsPortrait: 2, colsLandscape: 3, maxColsPortrait: 2, maxColsLandscape: 3,
   };
 
   var state = {
@@ -209,6 +211,48 @@
     });
     authCard.appendChild(el("div", { class: "actions" }, [aSave]));
 
+    // Display (orientation + grid density). Geometry comes from /api/device.
+    var dsp = state.spec || DEFAULT_SPEC;
+    var orient = el("select", {});
+    [["Portrait", 0], ["Landscape", 1], ["Portrait (flipped)", 2], ["Landscape (flipped)", 3]]
+      .forEach(function (o) {
+        var opt = el("option", { value: String(o[1]), text: o[0] });
+        if ((dsp.rotation || 0) === o[1]) opt.selected = true;
+        orient.appendChild(opt);
+      });
+    var maxP = dsp.maxColsPortrait || 2;
+    var maxL = dsp.maxColsLandscape || 3;
+    var colsP = el("input", { type: "number", min: "1", max: String(maxP), value: dsp.colsPortrait || 2 });
+    var colsL = el("input", { type: "number", min: "1", max: String(maxL), value: dsp.colsLandscape || 3 });
+
+    var dspChildren = [
+      el("h2", { text: "Display" }),
+      field("Orientation", orient),
+      field("Columns — portrait (max " + maxP + ")", colsP),
+      field("Columns — landscape (max " + maxL + ")", colsL),
+    ];
+    var autoR = null;
+    if (dsp.hasImu) {
+      autoR = el("input", { type: "checkbox" });
+      autoR.checked = !!dsp.autoRotate;
+      dspChildren.push(el("label", { class: "switch" },
+        [autoR, el("span", { text: "Auto-rotate (orientation sensor)" })]));
+    }
+    var dspCard = el("div", { class: "card" }, dspChildren);
+    var dSave = el("button", { class: "btn", text: "Save display" });
+    dSave.addEventListener("click", function () {
+      var body = {
+        rotation: parseInt(orient.value, 10) || 0,
+        colsPortrait: clamp(parseInt(colsP.value, 10) || 2, 1, maxP),
+        colsLandscape: clamp(parseInt(colsL.value, 10) || 3, 1, maxL),
+      };
+      if (autoR) body.autoRotate = autoR.checked;
+      postJSON("/api/config/display", body)
+        .then(function () { toast("Display saved"); return refreshDevice(); })
+        .catch(function (e) { toast("Save failed: " + e.message, true); });
+    });
+    dspCard.appendChild(el("div", { class: "actions" }, [dSave]));
+
     // System.
     var ota = el("a", { href: "/update", text: "Update firmware (OTA) →" });
     var reset = el("button", { class: "btn danger", text: "Factory reset" });
@@ -225,7 +269,7 @@
 
     app.appendChild(el("div", { class: "row" }, [
       el("div", { class: "col" }, [haCard, sysCard]),
-      el("div", { class: "col" }, [authCard]),
+      el("div", { class: "col" }, [dspCard, authCard]),
     ]));
   }
 
@@ -234,6 +278,12 @@
   }
   function refreshConfig() {
     return getJSON("/api/config").then(function (c) { state.cfg = c; });
+  }
+
+  // Re-fetch the device spec after a display change so the dashboard preview
+  // reflects the new orientation / column count.
+  function refreshDevice() {
+    return getJSON("/api/device").then(function (d) { if (d) state.spec = d; });
   }
 
   // ---- dashboard editor ----------------------------------------------------
@@ -379,20 +429,25 @@
     tv.style.padding = s.pagePadPx + "px";
     frame.appendChild(tv);
 
-    // Center the content when it doesn't fill the grid: a lone tile centers on
-    // screen, a left-column-only layout centers that column (mirrors the device).
-    var col1Used = packed.placements.some(function (p) { return p.col + p.w > 1; });
-    var singleColumn = page.tiles.length > 0 && !col1Used;
+    // Center the content when it doesn't fill the grid: build only the used columns
+    // at the normal cell width and center that block (mirrors the device buildPage,
+    // e.g. a 2-wide tile on a 3-column landscape grid).
+    var usedCols = 1;
+    packed.placements.forEach(function (p) { if (p.col + p.w > usedCols) usedCols = p.col + p.w; });
+    if (usedCols > s.gridCols) usedCols = s.gridCols;
+    var centerCols = usedCols < s.gridCols;
     var singleTile = page.tiles.length === 1;
-    var cellW = (s.screenW - 2 * s.pagePadPx - s.colGapPx) / s.gridCols;
+    var cellW = (s.screenW - 2 * s.pagePadPx - (s.gridCols - 1) * s.colGapPx) / s.gridCols;
 
     var content = el("div", { class: "pvcontent" });
     content.style.display = "grid";
-    content.style.gridTemplateColumns = singleColumn ? (cellW + "px") : ("repeat(" + s.gridCols + ",1fr)");
+    content.style.gridTemplateColumns = centerCols
+      ? ("repeat(" + usedCols + "," + cellW + "px)")
+      : ("repeat(" + s.gridCols + ",1fr)");
     content.style.gridAutoRows = s.rowHeightPx + "px";
     content.style.columnGap = s.colGapPx + "px";
     content.style.rowGap = s.rowGapPx + "px";
-    if (singleColumn) content.style.justifyContent = "center";
+    if (centerCols) content.style.justifyContent = "center";
     if (singleTile) content.style.alignContent = "center";
     tv.appendChild(content);
 
@@ -442,7 +497,7 @@
     }
     var out = [];
     (tiles || []).forEach(function (t) {
-      var w = clamp(t.w || 1, 1, 2), h = clamp(t.h || 1, 1, 2);
+      var w = clamp(t.w || 1, 1, cols), h = clamp(t.h || 1, 1, 2);
       var pr = 0, pc = 0, placed = false;
       for (var r = 0; !placed && r < 256; r++) {
         for (var c = 0; c + w <= cols; c++) {

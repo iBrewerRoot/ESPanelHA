@@ -20,10 +20,21 @@ namespace ui {
 struct Actions {
     std::function<void(const String &entityId)> onToggle;
     std::function<void(const String &entityId, int pct)> onBrightness;
+    std::function<void()> onCycleRotation;        // settings: rotate 90°
+    std::function<void(bool enabled)> onToggleAutoRotate;  // settings: IMU toggle
 };
 
 void uiInit();
 void uiSetActions(const Actions &actions);
+
+/** Update the dashboard geometry (screen size + grid columns) from the display
+ *  config. Call before uiInit() at boot, and before uiApplyOrientation() when
+ *  the orientation/columns change. Does not rebuild widgets by itself. */
+void uiSetDisplayConfig(const core::DisplayConfig &display);
+
+/** Rebuild every screen at the current geometry (after an orientation change).
+ *  The caller re-shows the appropriate screen afterwards. */
+void uiApplyOrientation();
 
 void uiShowBoot(const String &message);
 void uiShowSetup(const String &apName);

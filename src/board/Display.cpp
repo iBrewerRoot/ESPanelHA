@@ -27,19 +27,59 @@ using PanelType = Arduino_SH8601;
 PanelType *panel = nullptr;  // typed pointer (brightness, etc.)
 Arduino_GFX *gfx = nullptr;  // base pointer (drawing)
 
+lv_disp_t *disp = nullptr;       // registered LVGL display (for live res updates)
+lv_disp_drv_t drv;               // kept around so rotation can update hor/ver_res
+uint8_t currentRotation = 0;     // Arduino_GFX rotation index (0..3)
+
 /* Partial render buffer: SCREEN_WIDTH x BUFFER_LINES pixels, double-buffered.
  * Allocated from PSRAM when available, otherwise from internal RAM. */
 constexpr int kBufferLines = 40;
 lv_disp_draw_buf_t drawBuf;
 lv_color_t *buf1 = nullptr;
 lv_color_t *buf2 = nullptr;
+lv_color_t *rotBuf = nullptr;  // scratch for software rotation (landscape/180°)
 
-/* Push an LVGL rendered area to the panel. LVGL stores native RGB565
- * (LV_COLOR_16_SWAP=0), which is exactly what draw16bitRGBBitmap expects. */
+/* Push an LVGL rendered area to the panel. The CO5300/SH8601 controllers don't
+ * support hardware rotation (the driver only flips axes, which mangles
+ * landscape), so the panel stays at its native portrait orientation and we
+ * rotate the partial buffer here into native coordinates. LVGL stores native
+ * RGB565 (LV_COLOR_16_SWAP=0), exactly what draw16bitRGBBitmap expects. */
 void flushCb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *pixels) {
-    const int32_t w = area->x2 - area->x1 + 1;
-    const int32_t h = area->y2 - area->y1 + 1;
-    gfx->draw16bitRGBBitmap(area->x1, area->y1, reinterpret_cast<uint16_t *>(pixels), w, h);
+    const int x1 = area->x1, y1 = area->y1, x2 = area->x2, y2 = area->y2;
+    const int aw = x2 - x1 + 1, ah = y2 - y1 + 1;
+
+    if (currentRotation == 0 || !rotBuf) {
+        gfx->draw16bitRGBBitmap(x1, y1, reinterpret_cast<uint16_t *>(pixels), aw, ah);
+        lv_disp_flush_ready(drv);
+        return;
+    }
+
+    constexpr int NW = SCREEN_WIDTH, NH = SCREEN_HEIGHT;  // native portrait size
+    lv_color_t *dst = rotBuf;
+    int nx0 = 0, ny0 = 0, nw = aw, nh = ah;
+
+    // Map each logical pixel to its native panel position.
+    switch (currentRotation) {
+        case 1:  // landscape
+            nw = ah; nh = aw; nx0 = NW - 1 - y2; ny0 = x1;
+            for (int ly = y1; ly <= y2; ly++)
+                for (int lx = x1; lx <= x2; lx++)
+                    dst[(lx - x1) * nw + (y2 - ly)] = pixels[(ly - y1) * aw + (lx - x1)];
+            break;
+        case 2:  // 180°
+            nw = aw; nh = ah; nx0 = NW - 1 - x2; ny0 = NH - 1 - y2;
+            for (int ly = y1; ly <= y2; ly++)
+                for (int lx = x1; lx <= x2; lx++)
+                    dst[(y2 - ly) * nw + (x2 - lx)] = pixels[(ly - y1) * aw + (lx - x1)];
+            break;
+        default:  // 3: landscape (opposite of case 1)
+            nw = ah; nh = aw; nx0 = y1; ny0 = NH - 1 - x2;
+            for (int ly = y1; ly <= y2; ly++)
+                for (int lx = x1; lx <= x2; lx++)
+                    dst[(x2 - lx) * nw + (ly - y1)] = pixels[(ly - y1) * aw + (lx - x1)];
+            break;
+    }
+    gfx->draw16bitRGBBitmap(nx0, ny0, reinterpret_cast<uint16_t *>(dst), nw, nh);
     lv_disp_flush_ready(drv);
 }
 
@@ -84,6 +124,17 @@ PanelType *makePanel() {
                          LCD_COL_OFFSET, LCD_ROW_OFFSET, 0, 0);
 }
 
+// These QSPI AMOLED controllers address pixels in pairs, so a flush whose column
+// start or width is odd shears the image. In landscape the logical Y axis maps to
+// the native column axis, so vertical scrolling hits odd columns and tears. Snap
+// every flush area to even start + even size so all 4 rotations stay aligned.
+void rounderCb(lv_disp_drv_t *, lv_area_t *a) {
+    a->x1 &= ~1;
+    a->y1 &= ~1;
+    a->x2 |= 1;
+    a->y2 |= 1;
+}
+
 } // namespace
 
 void displayInit() {
@@ -98,20 +149,39 @@ void displayInit() {
     panel->setBrightness(255);  // AMOLED: panel starts dark until brightness set
 
     const size_t bufPixels = static_cast<size_t>(SCREEN_WIDTH) * kBufferLines;
-    buf1 = allocBuffer(bufPixels);
-    buf2 = allocBuffer(bufPixels);
+    // rounderCb can grow a chunk by up to 2 rows; over-allocate by 2 max-width
+    // rows so that growth never overruns the buffers (LVGL is told the nominal
+    // size, so its chunking is unchanged).
+    const size_t maxW = SCREEN_WIDTH > SCREEN_HEIGHT ? SCREEN_WIDTH : SCREEN_HEIGHT;
+    const size_t allocPixels = bufPixels + 2 * maxW;
+    buf1 = allocBuffer(allocPixels);
+    buf2 = allocBuffer(allocPixels);
+    rotBuf = allocBuffer(allocPixels);  // software-rotation scratch (landscape/180°)
     lv_disp_draw_buf_init(&drawBuf, buf1, buf2, bufPixels);
 
-    static lv_disp_drv_t drv;
     lv_disp_drv_init(&drv);
     drv.hor_res = SCREEN_WIDTH;
     drv.ver_res = SCREEN_HEIGHT;
     drv.flush_cb = flushCb;
+    drv.rounder_cb = rounderCb;  // even-align flushes (pair-addressed AMOLED)
     drv.draw_buf = &drawBuf;
-    lv_disp_drv_register(&drv);
+    disp = lv_disp_drv_register(&drv);
 }
 
-int displayWidth() { return SCREEN_WIDTH; }
-int displayHeight() { return SCREEN_HEIGHT; }
+void displaySetRotation(uint8_t rotation) {
+    rotation &= 0x03;
+    currentRotation = rotation;
+    // The panel stays native (rotation 0); flushCb rotates pixels in software.
+    // Only the LVGL logical resolution swaps for the landscape rotations (1/3).
+    const bool landscape = rotation & 1;
+    drv.hor_res = landscape ? SCREEN_HEIGHT : SCREEN_WIDTH;
+    drv.ver_res = landscape ? SCREEN_WIDTH : SCREEN_HEIGHT;
+    if (disp) lv_disp_drv_update(disp, &drv);
+}
+
+uint8_t displayRotation() { return currentRotation; }
+
+int displayWidth() { return (currentRotation & 1) ? SCREEN_HEIGHT : SCREEN_WIDTH; }
+int displayHeight() { return (currentRotation & 1) ? SCREEN_WIDTH : SCREEN_HEIGHT; }
 
 } // namespace hal

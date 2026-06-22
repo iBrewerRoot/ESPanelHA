@@ -43,6 +43,10 @@ signal-cellular-2
 signal-cellular-3
 signal-cellular-outline
 
+# --- display / settings (on-screen quick-settings) ---
+rotate-right
+screen-rotation
+
 # --- generic / fallback ---
 help-circle-outline
 alert-circle-outline

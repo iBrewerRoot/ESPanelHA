@@ -48,6 +48,12 @@
 #define IO_EXPANDER_ADDR 0x20
 #define EXIO_RESET_PINS {0, 1, 2}
 
+/* QMI8658 6-axis IMU on the shared I2C bus — drives optional auto-rotation.
+ * Address 0x6B (SA0 high); confirm with the boot I2C scan (WHO_AM_I 0x00 == 0x05). */
+#define BOARD_HAS_IMU 1
+#define IMU_DRIVER_QMI8658 1
+#define IMU_I2C_ADDR 0x6B
+
 /* This board has Octal PSRAM (set via BOARD_HAS_PSRAM in build_flags). */
 
 #endif /* BOARD_S3_AMOLED_18_H */

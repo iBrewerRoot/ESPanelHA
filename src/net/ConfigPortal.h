@@ -33,6 +33,10 @@ struct ConfigPortalCallbacks {
     std::function<void(core::Layout)> onSaveLayout;
     // New auth settings; empty password means "keep the stored hash".
     std::function<void(bool enabled, String user, String password)> onSaveAuth;
+    // Current display settings (orientation + columns), to prefill the editor.
+    std::function<core::DisplayConfig()> currentDisplay;
+    // New display settings on save (persist + re-apply orientation/grid live).
+    std::function<void(core::DisplayConfig)> onSaveDisplay;
     // Factory reset (wipe NVS + layout).
     std::function<void()> onFactoryReset;
 };

@@ -18,6 +18,10 @@ namespace core {
 constexpr size_t kMaxPages = 8;
 constexpr size_t kMaxTilesPerPage = 12;
 
+// Upper bound on the grid column count (per orientation). The actual maximum is
+// auto-detected from the screen width; this just caps it for any panel.
+constexpr uint8_t kMaxGridCols = 4;
+
 /** Home Assistant connection settings (entered via the web portal). */
 struct HAConfig {
     String host;        // hostname or IP, e.g. "homeassistant.local" or "192.168.1.10"
@@ -36,11 +40,12 @@ struct AvailableEntity {
 };
 
 /** One tile on a page: which entity, an optional label override, and its span
- *  on the on-screen 2-column grid (w/h in {1,2}). */
+ *  on the on-screen grid. w is a column span (clamped to the current column
+ *  count at render time); h is a row span in {1,2}. */
 struct LayoutTile {
     String entityId;    // e.g. "light.kitchen"
     String label;       // user override (empty -> HA friendly_name)
-    uint8_t w = 1;      // column span (1 = half width, 2 = full width)
+    uint8_t w = 1;      // column span (1 = one cell, up to the column count)
     uint8_t h = 1;      // row span (1 or 2)
 };
 
@@ -71,10 +76,25 @@ struct AuthConfig {
     String hash;        // hex, SHA-256(salt || password)
 };
 
+/** Screen orientation + grid density. Persisted in NVS. `rotation` is the
+ *  Arduino_GFX rotation index (0/2 = portrait, 1/3 = landscape); the column
+ *  count applied depends on whether the current rotation is portrait or
+ *  landscape. `autoRotate` is honored only on boards with an IMU. */
+struct DisplayConfig {
+    uint8_t rotation = 0;        // 0..3
+    bool autoRotate = false;     // IMU-driven (ignored when no sensor)
+    uint8_t colsPortrait = 2;    // grid columns when portrait
+    uint8_t colsLandscape = 3;   // grid columns when landscape
+
+    bool isLandscape() const { return rotation & 1; }
+    uint8_t cols() const { return isLandscape() ? colsLandscape : colsPortrait; }
+};
+
 struct AppConfig {
     HAConfig ha;
     Layout layout;
     AuthConfig auth;
+    DisplayConfig display;
 };
 
 } // namespace core

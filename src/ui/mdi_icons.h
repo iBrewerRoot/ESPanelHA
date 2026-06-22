@@ -10,6 +10,7 @@
 #include <lvgl.h>
 
 LV_FONT_DECLARE(mdi_font);
+LV_FONT_DECLARE(mdi_font_lg);  /* larger subset for on-screen settings tiles */
 
 #ifdef __cplusplus
 extern "C" {
@@ -53,6 +54,8 @@ const char *mdiGlyph(const char *name);
 #define MDI_SIGNAL_CELLULAR_2 "\xF3\xB0\xA2\xBD" /* mdi:signal-cellular-2 U+F08BD */
 #define MDI_SIGNAL_CELLULAR_3 "\xF3\xB0\xA2\xBE" /* mdi:signal-cellular-3 U+F08BE */
 #define MDI_SIGNAL_CELLULAR_OUTLINE "\xF3\xB0\xA2\xBF" /* mdi:signal-cellular-outline U+F08BF */
+#define MDI_ROTATE_RIGHT "\xF3\xB0\x91\xA7" /* mdi:rotate-right U+F0467 */
+#define MDI_SCREEN_ROTATION "\xF3\xB0\x91\xB5" /* mdi:screen-rotation U+F0475 */
 #define MDI_HELP_CIRCLE_OUTLINE "\xF3\xB0\x98\xA5" /* mdi:help-circle-outline U+F0625 */
 #define MDI_ALERT_CIRCLE_OUTLINE "\xF3\xB0\x97\x96" /* mdi:alert-circle-outline U+F05D6 */
 

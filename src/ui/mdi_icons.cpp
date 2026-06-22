@@ -36,6 +36,8 @@ const MdiEntry kIcons[] = {
     {"signal-cellular-2", MDI_SIGNAL_CELLULAR_2},
     {"signal-cellular-3", MDI_SIGNAL_CELLULAR_3},
     {"signal-cellular-outline", MDI_SIGNAL_CELLULAR_OUTLINE},
+    {"rotate-right", MDI_ROTATE_RIGHT},
+    {"screen-rotation", MDI_SCREEN_ROTATION},
     {"help-circle-outline", MDI_HELP_CIRCLE_OUTLINE},
     {"alert-circle-outline", MDI_ALERT_CIRCLE_OUTLINE},
 };

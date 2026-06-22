@@ -12,9 +12,11 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <lvgl.h>
+#include <math.h>
 
 #include "board/BoardConfig.h"
 #include "board/Display.h"
+#include "board/Imu.h"
 #include "board/Touch.h"
 #include "board/io/I2CBus.h"
 #include "core/AppConfig.h"
@@ -54,6 +56,15 @@ struct PendingAuth {
     String password;  // empty -> keep the stored hash
 };
 PendingAuth g_pendingAuth;
+volatile bool g_pendingDisplayApply = false;
+core::DisplayConfig g_pendingDisplay;
+
+// Queue an orientation/columns change; applied from loop() so all LVGL + flash
+// work stays on the main thread (the web callback and IMU tick both use this).
+void requestDisplayConfig(const core::DisplayConfig &d) {
+    g_pendingDisplay = d;
+    g_pendingDisplayApply = true;
+}
 
 bool g_haStarted = false; // true once the HA WebSocket client has been begun
 
@@ -102,6 +113,16 @@ void startHomeAssistant() {
         actions.onToggle = [](const String &id) { g_client.toggle(id); };
         actions.onBrightness = [](const String &id, int pct) {
             g_client.lightSetBrightnessPct(id, pct);
+        };
+        actions.onCycleRotation = []() {
+            core::DisplayConfig d = g_cfg.display;
+            d.rotation = (d.rotation + 1) & 0x03;
+            requestDisplayConfig(d);
+        };
+        actions.onToggleAutoRotate = [](bool on) {
+            core::DisplayConfig d = g_cfg.display;
+            d.autoRotate = on;
+            requestDisplayConfig(d);
         };
         ui::uiSetActions(actions);
     }
@@ -154,6 +175,23 @@ String deviceSpecJson() {
     doc["textMuted"] = hex(s.textMuted);
     doc["nameColor"] = hex(s.nameColor);
     doc["activeMix"] = s.activeMix;
+
+    // Orientation + grid density (screenW/H/gridCols above already reflect the
+    // active orientation). maxCols* bound the per-orientation column pickers.
+    doc["rotation"] = g_cfg.display.rotation;
+    doc["autoRotate"] = g_cfg.display.autoRotate;
+#if defined(BOARD_HAS_IMU)
+    doc["hasImu"] = true;
+#else
+    doc["hasImu"] = false;
+#endif
+    doc["colsPortrait"] = g_cfg.display.colsPortrait;
+    doc["colsLandscape"] = g_cfg.display.colsLandscape;
+    const int portraitW = s.screenW < s.screenH ? s.screenW : s.screenH;
+    const int landscapeW = s.screenW > s.screenH ? s.screenW : s.screenH;
+    doc["maxColsPortrait"] = ui::maxColsForWidth(s, portraitW, core::kMaxGridCols);
+    doc["maxColsLandscape"] = ui::maxColsForWidth(s, landscapeW, core::kMaxGridCols);
+
     String out;
     serializeJson(doc, out);
     return out;
@@ -179,11 +217,41 @@ void startConfigPortal() {
         g_pendingAuth = {enabled, std::move(user), std::move(password)};
         g_pendingAuthApply = true;
     };
+    cb.currentDisplay = []() { return g_cfg.display; };
+    cb.onSaveDisplay = [](core::DisplayConfig d) { requestDisplayConfig(d); };
     cb.onFactoryReset = []() { net::clearAll(); };  // portal arms the reboot
 
     net::PortalAuth pa{g_cfg.auth.enabled, g_cfg.auth.user, g_cfg.auth.salt,
                        g_cfg.auth.hash};
     net::configPortalBegin(cb, pa);
+}
+
+// IMU-driven auto-rotation: map gravity to one of the 4 rotations with simple
+// hysteresis and queue the change. Held when lying flat. The axis/sign mapping
+// is panel-specific — calibrate on hardware (log ax/ay per physical orientation).
+uint8_t imuRotationTarget(float ax, float ay) {
+    if (fabsf(ax) >= fabsf(ay)) return ax > 0 ? 0 : 2;
+    return ay > 0 ? 1 : 3;
+}
+
+void autoRotateTick() {
+    if (!g_cfg.display.autoRotate || !hal::imuAvailable()) return;
+    static uint32_t last = 0;
+    if (millis() - last < 150) return;  // throttle the I2C reads
+    last = millis();
+    float ax, ay, az;
+    if (!hal::imuRead(ax, ay, az)) return;
+    if (fabsf(az) > 0.85f) return;  // lying flat: keep the current orientation
+    const uint8_t target = imuRotationTarget(ax, ay);
+    static uint8_t pending = 0xFF;
+    static int stable = 0;
+    if (target != pending) { pending = target; stable = 0; }
+    else if (stable < 3) stable++;
+    if (stable >= 3 && target != g_cfg.display.rotation) {
+        core::DisplayConfig d = g_cfg.display;
+        d.rotation = target;
+        requestDisplayConfig(d);
+    }
 }
 
 } // namespace
@@ -201,11 +269,19 @@ void setup() {
     lv_init();
     hal::displayInit();
     hal::touchInit();
-    ui::uiInit();
-    ui::uiShowBoot("Starting...");
+    hal::imuBegin();  // no-op on boards without an IMU
 
+    // Load config before building the UI so the dashboard lays out at the stored
+    // orientation/columns from the first frame (no rebuild on boot).
     net::storageBegin();
     net::loadConfig(g_cfg);
+
+    ui::uiSetDisplayConfig(g_cfg.display);
+    hal::displaySetRotation(g_cfg.display.rotation);
+    hal::touchSetRotation(g_cfg.display.rotation);
+
+    ui::uiInit();
+    ui::uiShowBoot("Starting...");
 
 #if defined(HA_HOST)
     // Compile-time HA settings (secrets.h) take precedence — skips portal entry.
@@ -266,6 +342,8 @@ void loop() {
         ui::uiSetWifiStatus(WiFi.isConnected(), WiFi.RSSI());
     }
 
+    autoRotateTick();  // queues a rotation change when the IMU says so
+
     if (g_pendingHaApply) {
         g_pendingHaApply = false;
         g_cfg.ha = g_pendingHa;
@@ -298,6 +376,26 @@ void loop() {
         g_cfg.auth = a;
         net::saveAuth(a);
         net::configPortalSetAuth({a.enabled, a.user, a.salt, a.hash});
+    }
+
+    if (g_pendingDisplayApply) {
+        g_pendingDisplayApply = false;
+        const core::DisplayConfig prev = g_cfg.display;
+        g_cfg.display = g_pendingDisplay;
+        net::saveDisplayConfig(g_cfg.display);
+        ui::uiSetDisplayConfig(g_cfg.display);  // spec + auto-rotate switch state
+
+        // Only re-rotate + rebuild when the geometry actually changed; a plain
+        // auto-rotate toggle leaves the current screen untouched.
+        const bool geomChanged =
+            prev.rotation != g_cfg.display.rotation || prev.cols() != g_cfg.display.cols();
+        if (geomChanged) {
+            hal::displaySetRotation(g_cfg.display.rotation);
+            hal::touchSetRotation(g_cfg.display.rotation);
+            ui::uiApplyOrientation();
+            refreshScreen(WiFi.localIP().toString());
+            ui::uiSetWifiStatus(WiFi.isConnected(), WiFi.RSSI());  // rebuilt icon
+        }
     }
 
     delay(2); // yield to WiFi / async-TCP tasks and feed the watchdog
