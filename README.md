@@ -20,11 +20,9 @@ WiFi + HA onboarding, automatic entity discovery, a WYSIWYG web editor to design
 
 </div>
 
-<!-- 🎬 GIF at docs/media/hero.gif:
-<p align="center"><img src="docs/media/hero.gif" alt="Dashboard in action" width="320" /></p>
--->
-
-> 📸 **Screenshots & demo GIFs coming soon.**
+<p align="center">
+  <img src="docs/media/s3_amoled_18.webp" alt="ESPanelHA running on a Waveshare ESP32-S3 AMOLED panel" width="860">
+</p>
 
 ---
 
@@ -44,13 +42,9 @@ WiFi + HA onboarding, automatic entity discovery, a WYSIWYG web editor to design
 
 ## 🖼️ Screenshots
 
-| Dashboard | Web editor (WYSIWYG) | Settings menu |
+| Dashboard | Web editor (WYSIWYG) | Settings |
 |:--:|:--:|:--:|
-| _coming soon_ | _coming soon_ | _coming soon_ |
-
-<!--
-| ![Dashboard](docs/media/dashboard.png) | ![Web editor](docs/media/editor.png) | ![Settings](docs/media/settings.gif) |
--->
+| ![Dashboard](docs/media/dashboard.webp) | ![Web editor](docs/media/web_editor.webp) | ![Settings](docs/media/settings_page.webp) |
 
 ---
 
