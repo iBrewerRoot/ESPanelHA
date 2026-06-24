@@ -31,6 +31,15 @@ lv_disp_t *disp = nullptr;       // registered LVGL display (for live res update
 lv_disp_drv_t drv;               // kept around so rotation can update hor/ver_res
 uint8_t currentRotation = 0;     // Arduino_GFX rotation index (0..3)
 
+uint8_t activeBrightnessPct = 100;  // "awake" level, restored by displayWake()
+bool panelAsleep = false;           // true while blanked by displaySleep()
+
+// Map a 1..100 percentage to the panel's 0..255 brightness register.
+uint8_t pctToRaw(uint8_t pct) {
+    if (pct > 100) pct = 100;
+    return (uint8_t)((pct * 255 + 50) / 100);
+}
+
 /* Partial render buffer: SCREEN_WIDTH x BUFFER_LINES pixels, double-buffered.
  * Allocated from PSRAM when available, otherwise from internal RAM. */
 constexpr int kBufferLines = 40;
@@ -146,7 +155,9 @@ void displayInit() {
         Serial.println("[display] panel begin() failed");
     }
     panel->fillScreen(0x0000 /*black*/);
-    panel->setBrightness(255);  // AMOLED: panel starts dark until brightness set
+    // AMOLED stays dark until brightness is set; start at the active level (the
+    // app overrides it from PowerConfig once storage is loaded).
+    panel->setBrightness(pctToRaw(activeBrightnessPct));
 
     const size_t bufPixels = static_cast<size_t>(SCREEN_WIDTH) * kBufferLines;
     // rounderCb can grow a chunk by up to 2 rows; over-allocate by 2 max-width
@@ -183,5 +194,28 @@ uint8_t displayRotation() { return currentRotation; }
 
 int displayWidth() { return (currentRotation & 1) ? SCREEN_HEIGHT : SCREEN_WIDTH; }
 int displayHeight() { return (currentRotation & 1) ? SCREEN_WIDTH : SCREEN_HEIGHT; }
+
+void displaySetBrightness(uint8_t pct) {
+    if (pct < 1) pct = 1;
+    if (pct > 100) pct = 100;
+    activeBrightnessPct = pct;
+    if (panel && !panelAsleep) panel->setBrightness(pctToRaw(pct));
+}
+
+uint8_t displayBrightness() { return activeBrightnessPct; }
+
+void displaySleep() {
+    if (panelAsleep) return;
+    panelAsleep = true;
+    if (panel) panel->setBrightness(0);
+}
+
+void displayWake() {
+    if (!panelAsleep) return;
+    panelAsleep = false;
+    if (panel) panel->setBrightness(pctToRaw(activeBrightnessPct));
+}
+
+bool displayIsAsleep() { return panelAsleep; }
 
 } // namespace hal

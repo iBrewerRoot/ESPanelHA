@@ -84,10 +84,36 @@ const lvArgs = [
 console.log(`Converting ${icons.length} glyphs at ${FONT_SIZE}px...`);
 execFileSync("npx", lvArgs, { stdio: "inherit", cwd: __dirname, shell: process.platform === "win32" });
 
+// Smaller MDI subset for the status-bar battery icon (the battery glyph renders
+// taller than the signal/HA icons; a smaller font trims its height reliably —
+// label transform_zoom is not honored on non-image widgets in LVGL 8).
+const SM_FONT_SIZE = 32;
+const SM_NAMES = [
+  "battery", "battery-outline", "battery-charging", "battery-alert",
+  "battery-20", "battery-40", "battery-60", "battery-80",
+];
+const smIcons = SM_NAMES.map((n) => ({ name: n, cp: map.get(n) })).filter((i) => i.cp != null);
+if (smIcons.length) {
+  const smRanges = smIcons.map((i) => "0x" + i.cp.toString(16).toUpperCase());
+  const smArgs = [
+    "lv_font_conv",
+    "--font", ttf,
+    "--size", String(SM_FONT_SIZE),
+    "--bpp", String(BPP),
+    "--format", "lvgl",
+    "--lv-font-name", "mdi_font_sm",
+    "--no-compress",
+    "-o", join(outFontDir, "mdi_font_sm.c"),
+    "-r", smRanges.join(","),
+  ];
+  console.log(`Converting ${smIcons.length} small glyphs at ${SM_FONT_SIZE}px...`);
+  execFileSync("npx", smArgs, { stdio: "inherit", cwd: __dirname, shell: process.platform === "win32" });
+}
+
 // Larger MDI subset for the on-screen quick-settings tiles (same glyphs, bigger
 // render) so settings icons read clearly without enlarging the dashboard font.
 const BIG_FONT_SIZE = 64;
-const BIG_NAMES = ["rotate-right", "screen-rotation"];
+const BIG_NAMES = ["rotate-right", "screen-rotation", "power-sleep", "sleep"];
 const bigIcons = BIG_NAMES.map((n) => ({ name: n, cp: map.get(n) })).filter((i) => i.cp != null);
 if (bigIcons.length) {
   const bigRanges = bigIcons.map((i) => "0x" + i.cp.toString(16).toUpperCase());
@@ -132,6 +158,7 @@ let h = `/*
 
 LV_FONT_DECLARE(mdi_font);
 LV_FONT_DECLARE(mdi_font_lg);  /* larger subset for on-screen settings tiles */
+LV_FONT_DECLARE(mdi_font_sm);  /* smaller subset for the status-bar battery icon */
 
 #ifdef __cplusplus
 extern "C" {

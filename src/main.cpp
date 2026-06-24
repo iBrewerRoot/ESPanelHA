@@ -10,13 +10,18 @@
  */
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <esp_sleep.h>
 #include <lvgl.h>
 #include <math.h>
+#include <time.h>
 
 #include "board/BoardConfig.h"
 #include "board/Display.h"
 #include "board/Imu.h"
+#include "board/Power.h"
 #include "board/Touch.h"
 #include "board/io/I2CBus.h"
 #include "core/AppConfig.h"
@@ -58,12 +63,21 @@ struct PendingAuth {
 PendingAuth g_pendingAuth;
 volatile bool g_pendingDisplayApply = false;
 core::DisplayConfig g_pendingDisplay;
+volatile bool g_pendingPowerApply = false;
+core::PowerConfig g_pendingPower;
 
 // Queue an orientation/columns change; applied from loop() so all LVGL + flash
 // work stays on the main thread (the web callback and IMU tick both use this).
 void requestDisplayConfig(const core::DisplayConfig &d) {
     g_pendingDisplay = d;
     g_pendingDisplayApply = true;
+}
+
+// Queue a power-settings change (web portal + on-screen tiles), applied from
+// loop() so persistence + brightness/sleep changes stay on the main thread.
+void requestPowerConfig(const core::PowerConfig &p) {
+    g_pendingPower = p;
+    g_pendingPowerApply = true;
 }
 
 bool g_haStarted = false; // true once the HA WebSocket client has been begun
@@ -123,6 +137,24 @@ void startHomeAssistant() {
             core::DisplayConfig d = g_cfg.display;
             d.autoRotate = on;
             requestDisplayConfig(d);
+        };
+        actions.onSetBrightness = [](int pct) {
+            core::PowerConfig p = g_cfg.power;
+            p.brightness = (uint8_t)(pct < 1 ? 1 : (pct > 100 ? 100 : pct));
+            requestPowerConfig(p);
+        };
+        actions.onPreviewBrightness = [](int pct) {  // live, no persistence
+            hal::displaySetBrightness((uint8_t)(pct < 1 ? 1 : (pct > 100 ? 100 : pct)));
+        };
+        actions.onToggleScreenSleep = [](bool on) {
+            core::PowerConfig p = g_cfg.power;
+            p.screenSleepEnabled = on;
+            requestPowerConfig(p);
+        };
+        actions.onToggleDeepSleep = [](bool on) {
+            core::PowerConfig p = g_cfg.power;
+            p.deepSleepEnabled = on;
+            requestPowerConfig(p);
         };
         ui::uiSetActions(actions);
     }
@@ -192,6 +224,13 @@ String deviceSpecJson() {
     doc["maxColsPortrait"] = ui::maxColsForWidth(s, portraitW, core::kMaxGridCols);
     doc["maxColsLandscape"] = ui::maxColsForWidth(s, landscapeW, core::kMaxGridCols);
 
+    // Live battery/power status for the portal's read-only line (Power card).
+    doc["hasPmic"] = hal::powerAvailable();
+    doc["batteryPresent"] = hal::batteryPresent();
+    doc["onBattery"] = hal::onBattery();
+    doc["batteryCharging"] = hal::batteryCharging();
+    doc["batteryPct"] = hal::batteryPercent();
+
     String out;
     serializeJson(doc, out);
     return out;
@@ -219,6 +258,8 @@ void startConfigPortal() {
     };
     cb.currentDisplay = []() { return g_cfg.display; };
     cb.onSaveDisplay = [](core::DisplayConfig d) { requestDisplayConfig(d); };
+    cb.currentPower = []() { return g_cfg.power; };
+    cb.onSavePower = [](core::PowerConfig p) { requestPowerConfig(p); };
     cb.onFactoryReset = []() { net::clearAll(); };  // portal arms the reboot
 
     net::PortalAuth pa{g_cfg.auth.enabled, g_cfg.auth.user, g_cfg.auth.salt,
@@ -254,6 +295,96 @@ void autoRotateTick() {
     }
 }
 
+// ---- Power management -----------------------------------------------------
+
+// True when the local clock is inside the configured quiet-hours window. Returns
+// false until SNTP has set the clock, so a wrong window never blanks the screen.
+bool inQuietHours() {
+    const core::PowerConfig &p = g_cfg.power;
+    if (!p.quietHoursEnabled || p.quietStartHour == p.quietEndHour) return false;
+    time_t now = time(nullptr);
+    if (now < 1000000000) return false;  // clock not set yet
+    struct tm lt;
+    localtime_r(&now, &lt);
+    const int h = lt.tm_hour;
+    if (p.quietStartHour < p.quietEndHour)
+        return h >= p.quietStartHour && h < p.quietEndHour;
+    return h >= p.quietStartHour || h < p.quietEndHour;  // wraps midnight
+}
+
+// Blank the panel, arm a touch wake (where the INT line is RTC-capable) and enter
+// deep sleep. The chip reboots on wake, so the app restarts from setup().
+void enterDeepSleep() {
+#if defined(BOARD_DEEP_SLEEP_WAKE_GPIO)
+    Serial.println("[power] entering deep sleep (battery idle)");
+    hal::displaySleep();
+    delay(40);  // let the panel command flush before the rails drop
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)BOARD_DEEP_SLEEP_WAKE_GPIO, 0);  // INT active-low
+    esp_deep_sleep_start();
+#endif
+}
+
+// Two-stage idle handling: dim/blank the screen after the screen-sleep delay (or
+// during quiet hours), then deep-sleep after the longer delay when on battery.
+void powerTick() {
+    const core::PowerConfig &p = g_cfg.power;
+    const uint32_t idle = lv_disp_get_inactive_time(NULL);
+
+    // During quiet hours, force a short auto-off even if screen-sleep is disabled,
+    // so a touch still wakes the panel briefly before it blanks again.
+    uint32_t offMs = p.screenSleepMs();
+    if (inQuietHours()) {
+        const uint32_t quietMs = 8000;
+        offMs = (offMs == 0) ? quietMs : (offMs < quietMs ? offMs : quietMs);
+    }
+
+    if (offMs && idle >= offMs) {
+        if (!hal::displayIsAsleep()) hal::displaySleep();
+    } else if (hal::displayIsAsleep()) {
+        hal::displayWake();
+        ui::uiNotifyWake();  // swallow the tap that woke the screen
+    }
+
+    // Deep sleep only on battery, after the longer idle threshold.
+    const uint32_t dsMs = p.deepSleepMs();
+    if (dsMs && idle >= dsMs && hal::onBattery()) enterDeepSleep();
+}
+
+// Push battery state to HA as a sensor via the REST API (opt-in, throttled).
+// Blocking call kept short and infrequent; see open-work-items (non-blocking fetch).
+void reportBatteryToHa() {
+    const core::PowerConfig &p = g_cfg.power;
+    if (!p.reportBatteryToHa || !g_cfg.ha.isComplete() || !WiFi.isConnected()) return;
+    const int pct = hal::batteryPercent();
+    if (pct < 0) return;
+    static uint32_t last = 0;
+    if (last && millis() - last < 60000) return;  // at most once a minute
+    last = millis();
+
+    String url = (g_cfg.ha.useTls ? "https://" : "http://") + g_cfg.ha.host + ":" +
+                 String(g_cfg.ha.port) + "/api/states/" + p.batteryEntity;
+    String body = String("{\"state\":") + pct +
+                  ",\"attributes\":{\"device_class\":\"battery\","
+                  "\"unit_of_measurement\":\"%\",\"friendly_name\":\"ESPanelHA Battery\"}}";
+
+    HTTPClient http;
+    http.setConnectTimeout(1500);
+    http.setTimeout(2500);
+    bool begun;
+    if (g_cfg.ha.useTls) {
+        static WiFiClientSecure tls;
+        tls.setInsecure();  // matches the firmware's insecure-TLS mode
+        begun = http.begin(tls, url);
+    } else {
+        begun = http.begin(url);
+    }
+    if (!begun) return;
+    http.addHeader("Authorization", "Bearer " + g_cfg.ha.token);
+    http.addHeader("Content-Type", "application/json");
+    http.POST(body);
+    http.end();
+}
+
 } // namespace
 
 void setup() {
@@ -269,7 +400,8 @@ void setup() {
     lv_init();
     hal::displayInit();
     hal::touchInit();
-    hal::imuBegin();  // no-op on boards without an IMU
+    hal::imuBegin();   // no-op on boards without an IMU
+    hal::powerBegin(); // no-op on boards without a PMIC
 
     // Load config before building the UI so the dashboard lays out at the stored
     // orientation/columns from the first frame (no rebuild on boot).
@@ -279,8 +411,10 @@ void setup() {
     ui::uiSetDisplayConfig(g_cfg.display);
     hal::displaySetRotation(g_cfg.display.rotation);
     hal::touchSetRotation(g_cfg.display.rotation);
+    hal::displaySetBrightness(g_cfg.power.brightness);  // apply stored brightness
 
     ui::uiInit();
+    ui::uiSetPowerConfig(g_cfg.power);  // reflect brightness slider + sleep toggles
     ui::uiShowBoot("Starting...");
 
 #if defined(HA_HOST)
@@ -313,6 +447,8 @@ void onWifiConnected() {
                   ip.c_str(), ip.c_str());
 
     net::wifiStopPortal();                  // free :80 from the WiFiManager portal
+    // Local time for the quiet-hours window (Europe/Paris); harmless otherwise.
+    configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.nist.gov");
     startConfigPortal();                    // web config always reachable now
     if (g_cfg.ha.isComplete()) startHomeAssistant();
     refreshScreen(ip);
@@ -342,7 +478,17 @@ void loop() {
         ui::uiSetWifiStatus(WiFi.isConnected(), WiFi.RSSI());
     }
 
+    // Refresh the battery indicator (and push to HA if enabled), throttled.
+    static uint32_t lastBatPush = 0;
+    if (millis() - lastBatPush > 5000) {
+        lastBatPush = millis();
+        ui::uiSetBatteryStatus(hal::batteryPresent(), hal::onBattery(),
+                               hal::batteryPercent(), hal::batteryCharging());
+        reportBatteryToHa();
+    }
+
     autoRotateTick();  // queues a rotation change when the IMU says so
+    powerTick();       // screen-off / deep-sleep / quiet-hours handling
 
     if (g_pendingHaApply) {
         g_pendingHaApply = false;
@@ -396,6 +542,15 @@ void loop() {
             refreshScreen(WiFi.localIP().toString());
             ui::uiSetWifiStatus(WiFi.isConnected(), WiFi.RSSI());  // rebuilt icon
         }
+    }
+
+    if (g_pendingPowerApply) {
+        g_pendingPowerApply = false;
+        g_cfg.power = g_pendingPower;
+        net::savePowerConfig(g_cfg.power);
+        hal::displaySetBrightness(g_cfg.power.brightness);
+        hal::displayWake();              // make a brightness change visible at once
+        ui::uiSetPowerConfig(g_cfg.power);  // sync slider + sleep toggles
     }
 
     delay(2); // yield to WiFi / async-TCP tasks and feed the watchdog

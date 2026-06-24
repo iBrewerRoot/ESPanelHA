@@ -48,4 +48,9 @@
 #define IO_EXPANDER_ADDR 0x20
 #define EXIO_RESET_PINS {0, 1, 2}
 
+/* AXP2101 PMIC on the shared I2C bus (0x34) — battery gauge + USB/VBUS sensing.
+ * Presence/registers to be confirmed on hardware at bring-up. */
+#define BOARD_HAS_PMIC_AXP2101 1
+#define PMIC_I2C_ADDR 0x34
+
 #endif /* BOARD_C6_AMOLED_18_H */

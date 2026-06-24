@@ -80,6 +80,19 @@ void handleGetConfig(AsyncWebServerRequest *req) {
     a["enabled"] = g_auth.enabled;
     a["user"] = g_auth.user;
 
+    core::PowerConfig pw = callbacks.currentPower();
+    JsonObject p = doc["power"].to<JsonObject>();
+    p["brightness"] = pw.brightness;
+    p["screenSleepEnabled"] = pw.screenSleepEnabled;
+    p["screenSleepSec"] = pw.screenSleepSec;
+    p["deepSleepEnabled"] = pw.deepSleepEnabled;
+    p["deepSleepSec"] = pw.deepSleepSec;
+    p["quietHoursEnabled"] = pw.quietHoursEnabled;
+    p["quietStartHour"] = pw.quietStartHour;
+    p["quietEndHour"] = pw.quietEndHour;
+    p["reportBatteryToHa"] = pw.reportBatteryToHa;
+    p["batteryEntity"] = pw.batteryEntity;
+
     String out;
     serializeJson(doc, out);
     req->send(200, "application/json", out);
@@ -193,6 +206,38 @@ void handlePostDisplay(AsyncWebServerRequest *req, JsonVariant &json) {
     d.colsPortrait = clampCols(d.colsPortrait);
     d.colsLandscape = clampCols(d.colsLandscape);
     callbacks.onSaveDisplay(d);
+    req->send(200, "application/json", "{\"ok\":true}");
+}
+
+void handlePostPower(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    JsonObject o = json.as<JsonObject>();
+    core::PowerConfig p = callbacks.currentPower();  // keep fields not re-sent
+    if (o["brightness"].is<int>()) p.brightness = (uint8_t)o["brightness"].as<int>();
+    if (o["screenSleepEnabled"].is<bool>()) p.screenSleepEnabled = o["screenSleepEnabled"].as<bool>();
+    if (o["screenSleepSec"].is<int>()) p.screenSleepSec = (uint16_t)o["screenSleepSec"].as<int>();
+    if (o["deepSleepEnabled"].is<bool>()) p.deepSleepEnabled = o["deepSleepEnabled"].as<bool>();
+    if (o["deepSleepSec"].is<int>()) p.deepSleepSec = (uint16_t)o["deepSleepSec"].as<int>();
+    if (o["quietHoursEnabled"].is<bool>()) p.quietHoursEnabled = o["quietHoursEnabled"].as<bool>();
+    if (o["quietStartHour"].is<int>()) p.quietStartHour = (uint8_t)o["quietStartHour"].as<int>();
+    if (o["quietEndHour"].is<int>()) p.quietEndHour = (uint8_t)o["quietEndHour"].as<int>();
+    if (o["reportBatteryToHa"].is<bool>()) p.reportBatteryToHa = o["reportBatteryToHa"].as<bool>();
+    if (o["batteryEntity"].is<const char *>()) {
+        String e = o["batteryEntity"].as<String>();
+        e.trim();
+        if (e.length()) p.batteryEntity = e;
+    }
+
+    // Clamp to safe bounds.
+    if (p.brightness < 1) p.brightness = 1;
+    if (p.brightness > 100) p.brightness = 100;
+    if (p.screenSleepSec < 5) p.screenSleepSec = 5;
+    if (p.quietStartHour > 23) p.quietStartHour = 0;
+    if (p.quietEndHour > 23) p.quietEndHour = 0;
+    // Deep sleep must idle at least as long as the screen-off delay.
+    if (p.deepSleepSec < p.screenSleepSec) p.deepSleepSec = p.screenSleepSec;
+
+    callbacks.onSavePower(p);
     req->send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -340,6 +385,9 @@ void configPortalBegin(const ConfigPortalCallbacks &cb, const PortalAuth &auth) 
     auto *dispH = new AsyncCallbackJsonWebHandler("/api/config/display", handlePostDisplay);
     dispH->setMaxContentLength(kMaxBodyBytes);
     server.addHandler(dispH);
+    auto *pwrH = new AsyncCallbackJsonWebHandler("/api/config/power", handlePostPower);
+    pwrH->setMaxContentLength(kMaxBodyBytes);
+    server.addHandler(pwrH);
 
     server.on("/api/reset", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!requireAuth(req)) return;

@@ -90,11 +90,37 @@ struct DisplayConfig {
     uint8_t cols() const { return isLandscape() ? colsLandscape : colsPortrait; }
 };
 
+/** Power management: screen brightness, two-stage idle (screen off then deep
+ *  sleep), optional night-time blanking, and optional battery reporting to HA.
+ *  Persisted in NVS. Deep sleep is honored only while running on battery. */
+struct PowerConfig {
+    uint8_t brightness = 80;          // active brightness, % (1..100)
+    bool screenSleepEnabled = true;
+    uint16_t screenSleepSec = 60;     // idle time before the screen turns off
+    bool deepSleepEnabled = false;    // honored only on battery
+    uint16_t deepSleepSec = 600;      // idle time before deep sleep (>= screenSleepSec)
+    bool quietHoursEnabled = false;   // blank the screen during a nightly window
+    uint8_t quietStartHour = 23;      // 0..23
+    uint8_t quietEndHour = 7;         // 0..23 (wraps past midnight)
+    bool reportBatteryToHa = false;   // web-toggle: push battery level to HA
+    String batteryEntity = "sensor.espanelha_battery";  // target HA entity
+
+    // Idle ms before the screen blanks (0 when disabled).
+    uint32_t screenSleepMs() const {
+        return screenSleepEnabled ? (uint32_t)screenSleepSec * 1000 : 0;
+    }
+    // Idle ms before deep sleep (0 when disabled).
+    uint32_t deepSleepMs() const {
+        return deepSleepEnabled ? (uint32_t)deepSleepSec * 1000 : 0;
+    }
+};
+
 struct AppConfig {
     HAConfig ha;
     Layout layout;
     AuthConfig auth;
     DisplayConfig display;
+    PowerConfig power;
 };
 
 } // namespace core

@@ -46,6 +46,19 @@ signal-cellular-outline
 # --- display / settings (on-screen quick-settings) ---
 rotate-right
 screen-rotation
+brightness-6
+power-sleep
+sleep
+
+# --- battery / power status (top-bar indicator) ---
+battery
+battery-outline
+battery-charging
+battery-alert
+battery-20
+battery-40
+battery-60
+battery-80
 
 # --- generic / fallback ---
 help-circle-outline

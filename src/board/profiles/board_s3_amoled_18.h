@@ -43,6 +43,11 @@
 #define TOUCH_I2C_INT 21
 #define TOUCH_I2C_ADDR 0x15
 
+/* Deep-sleep touch wake: the touch INT line (GPIO21) is RTC-capable on the S3,
+ * so ext0 can wake the chip on a touch. (Not defined on boards whose INT pin is
+ * outside the RTC/LP domain — deep sleep then stays disabled there.) */
+#define BOARD_DEEP_SLEEP_WAKE_GPIO TOUCH_I2C_INT
+
 /* TCA9554 I/O expander: EXIO 0,1,2 are the reset lines (assert low, release high). */
 #define BOARD_HAS_IO_EXPANDER 1
 #define IO_EXPANDER_ADDR 0x20
@@ -53,6 +58,11 @@
 #define BOARD_HAS_IMU 1
 #define IMU_DRIVER_QMI8658 1
 #define IMU_I2C_ADDR 0x6B
+
+/* AXP2101 PMIC on the shared I2C bus (0x34) — battery gauge + USB/VBUS sensing.
+ * Registers verified on hardware at bring-up (see board/Power.cpp). */
+#define BOARD_HAS_PMIC_AXP2101 1
+#define PMIC_I2C_ADDR 0x34
 
 /* This board has Octal PSRAM (set via BOARD_HAS_PSRAM in build_flags). */
 

@@ -23,6 +23,7 @@ void saveHAConfig(const core::HAConfig &ha);   // token stored encrypted
 void saveLayout(const core::Layout &layout);   // clamped to core::kMax* caps
 void saveAuth(const core::AuthConfig &auth);
 void saveDisplayConfig(const core::DisplayConfig &display);  // orientation + columns
+void savePowerConfig(const core::PowerConfig &power);        // brightness + sleep + battery
 
 /** Wipe all stored settings (factory reset). */
 void clearAll();

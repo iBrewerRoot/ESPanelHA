@@ -87,6 +87,26 @@ lv_obj_t *autoRotIcon = nullptr;    // its glyph (recolored to show on/off)
 lv_obj_t *autoRotCap = nullptr;     // its caption (recolored with the glyph)
 bool autoRotateOn = false;          // remembered across UI rebuilds
 
+// Power quick-settings: screen-sleep + (where supported) deep-sleep toggles, plus
+// a brightness slider above the footer. State is remembered across UI rebuilds.
+lv_obj_t *sleepTile = nullptr, *sleepIcon = nullptr, *sleepCap = nullptr;
+bool screenSleepOn = true;
+lv_obj_t *deepTile = nullptr, *deepIcon = nullptr, *deepCap = nullptr;
+bool deepSleepOn = false;
+lv_obj_t *brightSlider = nullptr;   // on-screen brightness slider (settings menu)
+int curBrightnessPct = 80;          // remembered to restore the slider after a rebuild
+
+// Battery indicator (top-left of the menu bar + dashboard top bar). Last known
+// state is kept so a UI rebuild restores the icon without waiting for a poll.
+lv_obj_t *menuBatteryIcon = nullptr, *dashBatteryIcon = nullptr;
+bool batPresent = false, batOnBattery = false, batCharging = false;
+int batPercent = -1;
+
+// Short window after a touch-wake during which tile/slider taps are swallowed, so
+// the tap that woke the screen doesn't also toggle the entity underneath.
+uint32_t wakeIgnoreUntil = 0;
+bool wakeGuardActive() { return wakeIgnoreUntil && (int32_t)(millis() - wakeIgnoreUntil) < 0; }
+
 // Last HA-status badge color, remembered so a UI rebuild (orientation change)
 // restores it instead of reverting to the grey default until the next status event.
 uint32_t lastConnColor = S.iconOff;
@@ -315,13 +335,13 @@ void applyVisual(Card &card, const ha::EntityState &e) {
 }
 
 void onTileEvent(lv_event_t *e) {
-    if (suppressEvents) return;
+    if (suppressEvents || wakeGuardActive()) return;
     auto *id = static_cast<String *>(lv_event_get_user_data(e));
     if (id && actions.onToggle) actions.onToggle(*id);
 }
 
 void onSliderEvent(lv_event_t *e) {
-    if (suppressEvents) return;
+    if (suppressEvents || wakeGuardActive()) return;
     auto *id = static_cast<String *>(lv_event_get_user_data(e));
     auto *slider = static_cast<lv_obj_t *>(lv_event_get_target(e));
     if (id && actions.onBrightness) {
@@ -686,6 +706,95 @@ void onAutoRotTile(lv_event_t *) {
 }
 #endif
 
+// Reflect an on/off toggle tile (same look as the auto-rotate tile): accent fill
+// + white glyph/caption when on, muted otherwise.
+void applyToggleVisual(lv_obj_t *tile, lv_obj_t *icon, lv_obj_t *cap, bool on) {
+    if (!tile) return;
+    const lv_color_t fg = lv_color_hex(on ? 0xffffff : kIconOff);
+    lv_obj_set_style_bg_color(tile, lv_color_hex(on ? kPrimary : kTileBg), 0);
+    if (icon) lv_obj_set_style_text_color(icon, fg, 0);
+    if (cap) lv_obj_set_style_text_color(cap, on ? fg : lv_color_hex(kTextMuted), 0);
+}
+
+// "Veille" tile: enable/disable the idle screen-off.
+void onSleepTile(lv_event_t *) {
+    screenSleepOn = !screenSleepOn;
+    applyToggleVisual(sleepTile, sleepIcon, sleepCap, screenSleepOn);
+    if (actions.onToggleScreenSleep) actions.onToggleScreenSleep(screenSleepOn);
+}
+
+// "Deep sleep" tile: enable/disable battery deep sleep.
+void onDeepTile(lv_event_t *) {
+    deepSleepOn = !deepSleepOn;
+    applyToggleVisual(deepTile, deepIcon, deepCap, deepSleepOn);
+    if (actions.onToggleDeepSleep) actions.onToggleDeepSleep(deepSleepOn);
+}
+
+// Brightness slider dragging -> drive the panel live (no persistence).
+void onBrightSliderLive(lv_event_t *e) {
+    if (suppressEvents) return;
+    auto *sl = static_cast<lv_obj_t *>(lv_event_get_target(e));
+    curBrightnessPct = (int)lv_slider_get_value(sl);
+    if (actions.onPreviewBrightness) actions.onPreviewBrightness(curBrightnessPct);
+}
+
+// Brightness slider release -> persist (the app saves + drives the panel).
+void onBrightSlider(lv_event_t *e) {
+    if (suppressEvents) return;
+    auto *sl = static_cast<lv_obj_t *>(lv_event_get_target(e));
+    curBrightnessPct = (int)lv_slider_get_value(sl);
+    if (actions.onSetBrightness) actions.onSetBrightness(curBrightnessPct);
+}
+
+// Battery glyph for the current charge level (charging shows the bolt variant).
+const char *batteryGlyph() {
+    if (batCharging) return MDI_BATTERY_CHARGING;
+    if (batPercent < 0) return MDI_BATTERY_OUTLINE;
+    if (batPercent >= 90) return MDI_BATTERY;
+    if (batPercent >= 70) return MDI_BATTERY_80;
+    if (batPercent >= 50) return MDI_BATTERY_60;
+    if (batPercent >= 30) return MDI_BATTERY_40;
+    if (batPercent >= 10) return MDI_BATTERY_20;
+    return MDI_BATTERY_ALERT;
+}
+
+uint32_t batteryColor() {
+    if (batCharging) return kStatusOk;
+    if (batPercent >= 0 && batPercent < 10) return kStatusDown;  // critical (red)
+    if (batPercent >= 0 && batPercent < 25) return kAmber;       // low (amber)
+    return kStatusOk;  // healthy / full: standard green
+}
+
+// Show the battery icon only when on battery or charging; otherwise hide it (and
+// pull the WiFi indicator back to the corner). Updates both title bars.
+void applyBatteryVisual() {
+    const bool show = batPresent && (batOnBattery || batCharging);
+    const char *g = batteryGlyph();
+    const lv_color_t c = lv_color_hex(batteryColor());
+
+    if (menuBatteryIcon) {
+        if (show) {
+            lv_label_set_text(menuBatteryIcon, g);
+            lv_obj_set_style_text_color(menuBatteryIcon, c, 0);
+            lv_obj_clear_flag(menuBatteryIcon, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(menuBatteryIcon, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    // WiFi indicator shifts right to clear the battery icon when it's visible.
+    if (menuWifiIcon) lv_obj_align(menuWifiIcon, LV_ALIGN_LEFT_MID, show ? 44 : 14, 0);
+
+    if (dashBatteryIcon) {
+        if (show) {
+            lv_label_set_text(dashBatteryIcon, g);
+            lv_obj_set_style_text_color(dashBatteryIcon, c, 0);
+            lv_obj_clear_flag(dashBatteryIcon, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(dashBatteryIcon, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
 } // namespace
 
 void uiInit() {
@@ -760,6 +869,14 @@ void uiInit() {
     lv_label_set_text(connIcon, MDI_HOME_ASSISTANT);
     lv_obj_align(connIcon, LV_ALIGN_RIGHT_MID, -14, 0);
 
+    // Battery indicator, top-left (hidden unless on battery / charging).
+    dashBatteryIcon = lv_label_create(topBar);
+    lv_obj_set_style_text_font(dashBatteryIcon, &mdi_font_sm, 0);  // smaller than the HA/wifi icons
+    lv_obj_set_style_text_color(dashBatteryIcon, lv_color_hex(kStatusOk), 0);
+    lv_label_set_text(dashBatteryIcon, MDI_BATTERY);
+    lv_obj_align(dashBatteryIcon, LV_ALIGN_LEFT_MID, 14, 0);
+    lv_obj_add_flag(dashBatteryIcon, LV_OBJ_FLAG_HIDDEN);
+
     titleLabel = lv_label_create(topBar);
     const int titleReserve = 64;  // px kept clear on each side (protects the icon)
     lv_obj_set_width(titleLabel, S.screenW - 2 * titleReserve);
@@ -814,12 +931,25 @@ void uiInit() {
     // "Settings" left + HA icon right, a lighter panel for future buttons, and
     // the portal URL small at the bottom.
     screenMenu = makeScreen();
+    // The menu content is statically laid out; keep the screen itself from
+    // scrolling so a horizontal drag on the brightness slider isn't eaten by the
+    // screen's scroll handling (the swipe-up gesture is unaffected).
+    lv_obj_clear_flag(screenMenu, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *menuBar = lv_obj_create(screenMenu);
     lv_obj_remove_style_all(menuBar);
     lv_obj_set_size(menuBar, lv_pct(100), S.topBarHeightPx);
     lv_obj_align(menuBar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_clear_flag(menuBar, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Battery indicator at the far top-left (hidden unless on battery / charging);
+    // the WiFi indicator sits just to its right and shifts when it appears.
+    menuBatteryIcon = lv_label_create(menuBar);
+    lv_obj_set_style_text_font(menuBatteryIcon, &mdi_font_sm, 0);  // smaller than the HA/wifi icons
+    lv_obj_set_style_text_color(menuBatteryIcon, lv_color_hex(kStatusOk), 0);
+    lv_label_set_text(menuBatteryIcon, MDI_BATTERY);
+    lv_obj_align(menuBatteryIcon, LV_ALIGN_LEFT_MID, 14, 0);
+    lv_obj_add_flag(menuBatteryIcon, LV_OBJ_FLAG_HIDDEN);
 
     // WiFi-to-AP signal indicator, inset from the rounded top-left corner.
     menuWifiIcon = lv_label_create(menuBar);
@@ -841,10 +971,11 @@ void uiInit() {
     lv_obj_align(menuConnIcon, LV_ALIGN_RIGHT_MID, -14, 0);
 
     const int menuMargin = 12;
-    const int menuFooterH = 40;  // footer band; the IP font nearly fills it
+    const int menuFooterH = 40;   // footer band; the IP font nearly fills it
+    const int menuBrightH = 46;   // brightness-slider band above the footer
     menuPanel = lv_obj_create(screenMenu);
     lv_obj_set_size(menuPanel, S.screenW - 2 * menuMargin,
-                    S.screenH - S.topBarHeightPx - menuFooterH);
+                    S.screenH - S.topBarHeightPx - menuFooterH - menuBrightH);
     lv_obj_align(menuPanel, LV_ALIGN_TOP_MID, 0, S.topBarHeightPx);
     lv_obj_set_style_bg_color(menuPanel, lv_color_hex(S.pressedBg), 0);
     lv_obj_set_style_bg_opa(menuPanel, LV_OPA_COVER, 0);
@@ -869,11 +1000,45 @@ void uiInit() {
     applyAutoRotVisual();
 #endif
 
+    // Screen-sleep toggle tile.
+    sleepTile = makeQuickTile(menuPanel, MDI_POWER_SLEEP, "Veille", &sleepIcon, &sleepCap);
+    lv_obj_add_event_cb(sleepTile, onSleepTile, LV_EVENT_CLICKED, nullptr);
+    applyToggleVisual(sleepTile, sleepIcon, sleepCap, screenSleepOn);
+
+#if defined(BOARD_DEEP_SLEEP_WAKE_GPIO)
+    // Deep-sleep toggle tile — only on boards that can wake from touch.
+    deepTile = makeQuickTile(menuPanel, MDI_SLEEP, "Deep sleep", &deepIcon, &deepCap);
+    lv_obj_add_event_cb(deepTile, onDeepTile, LV_EVENT_CLICKED, nullptr);
+    applyToggleVisual(deepTile, deepIcon, deepCap, deepSleepOn);
+#endif
+
+    // Brightness control just above the footer. The slider is placed directly on
+    // the screen (no flex container) so its hit-box lines up exactly with its
+    // visual track, and a generous ext_click_area makes the thin track easy to
+    // grab on touch (the layout offset came from the flex row's tall icon).
+    brightSlider = lv_slider_create(screenMenu);
+    lv_slider_set_range(brightSlider, 1, 100);
+    lv_slider_set_value(brightSlider, curBrightnessPct, LV_ANIM_OFF);
+    lv_obj_set_size(brightSlider, S.screenW - 2 * menuMargin - 44, S.sliderHeightPx);
+    lv_obj_align(brightSlider, LV_ALIGN_BOTTOM_MID, 18, -(menuFooterH + 8));
+    lv_obj_set_ext_click_area(brightSlider, 34);  // big symmetric touch zone around the track
+    // Live while dragging (panel only) for instant feedback; persist on release.
+    lv_obj_add_event_cb(brightSlider, onBrightSliderLive, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(brightSlider, onBrightSlider, LV_EVENT_RELEASED, nullptr);
+
+    lv_obj_t *brightGlyph = lv_label_create(screenMenu);
+    lv_obj_set_style_text_font(brightGlyph, &mdi_font, 0);
+    lv_obj_set_style_text_color(brightGlyph, lv_color_hex(kTextMuted), 0);
+    lv_label_set_text(brightGlyph, MDI_BRIGHTNESS_6);
+    lv_obj_align_to(brightGlyph, brightSlider, LV_ALIGN_OUT_LEFT_MID, -10, 0);
+
     menuIpLabel = lv_label_create(screenMenu);
     lv_obj_set_style_text_color(menuIpLabel, lv_color_hex(kTextMuted), 0);
     lv_obj_set_style_text_font(menuIpLabel, fontForPx(24), 0);  // fills the footer band
     lv_obj_align(menuIpLabel, LV_ALIGN_BOTTOM_MID, 0, -4);
     lv_label_set_text(menuIpLabel, "");
+
+    applyBatteryVisual();  // restore the battery icon state after a rebuild
 
     // Swipe gestures: down on the dashboard opens the menu, up on the menu returns.
     lv_obj_add_event_cb(screenDash, onDashGesture, LV_EVENT_GESTURE, nullptr);
@@ -1048,5 +1213,34 @@ void uiSetWifiStatus(bool connected, int rssi) {
     lv_label_set_text(menuWifiIcon, glyph);
     lv_obj_set_style_text_color(menuWifiIcon, lv_color_hex(c), 0);
 }
+
+void uiSetBatteryStatus(bool present, bool onBattery, int percent, bool charging) {
+    batPresent = present;
+    batOnBattery = onBattery;
+    batPercent = percent;
+    batCharging = charging;
+    applyBatteryVisual();
+}
+
+void uiSetBrightness(int percent) {
+    if (percent < 1) percent = 1;
+    if (percent > 100) percent = 100;
+    curBrightnessPct = percent;
+    if (brightSlider) {
+        suppressEvents = true;
+        lv_slider_set_value(brightSlider, percent, LV_ANIM_OFF);
+        suppressEvents = false;
+    }
+}
+
+void uiSetPowerConfig(const core::PowerConfig &power) {
+    screenSleepOn = power.screenSleepEnabled;
+    deepSleepOn = power.deepSleepEnabled;
+    applyToggleVisual(sleepTile, sleepIcon, sleepCap, screenSleepOn);
+    applyToggleVisual(deepTile, deepIcon, deepCap, deepSleepOn);
+    uiSetBrightness(power.brightness);
+}
+
+void uiNotifyWake() { wakeIgnoreUntil = millis() + 400; }
 
 } // namespace ui

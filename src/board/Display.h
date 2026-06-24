@@ -27,6 +27,23 @@ uint8_t displayRotation();
 int displayWidth();
 int displayHeight();
 
+/** Set the active panel brightness as a percentage (1..100). Remembered as the
+ *  "awake" level so displayWake() can restore it after a sleep. */
+void displaySetBrightness(uint8_t pct);
+
+/** Current active brightness percentage (the level displayWake() restores). */
+uint8_t displayBrightness();
+
+/** Blank the panel (brightness 0). On AMOLED this is near-zero power; the active
+ *  level is kept so displayWake() restores it. Idempotent. */
+void displaySleep();
+
+/** Restore the panel to the active brightness after displaySleep(). Idempotent. */
+void displayWake();
+
+/** True while the panel is blanked by displaySleep(). */
+bool displayIsAsleep();
+
 } // namespace hal
 
 #endif /* HAL_DISPLAY_H */

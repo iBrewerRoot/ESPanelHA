@@ -37,6 +37,10 @@ struct ConfigPortalCallbacks {
     std::function<core::DisplayConfig()> currentDisplay;
     // New display settings on save (persist + re-apply orientation/grid live).
     std::function<void(core::DisplayConfig)> onSaveDisplay;
+    // Current power settings (brightness + sleep + battery), to prefill the editor.
+    std::function<core::PowerConfig()> currentPower;
+    // New power settings on save (persist + apply brightness/sleep thresholds).
+    std::function<void(core::PowerConfig)> onSavePower;
     // Factory reset (wipe NVS + layout).
     std::function<void()> onFactoryReset;
 };

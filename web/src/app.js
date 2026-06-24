@@ -253,6 +253,9 @@
     });
     dspCard.appendChild(el("div", { class: "actions" }, [dSave]));
 
+    // Power (brightness + idle sleep + quiet hours + battery reporting).
+    var pwrCard = buildPowerCard();
+
     // System.
     var ota = el("a", { href: "/update", text: "Update firmware (OTA) →" });
     var reset = el("button", { class: "btn danger", text: "Factory reset" });
@@ -268,9 +271,81 @@
     ]);
 
     app.appendChild(el("div", { class: "row" }, [
-      el("div", { class: "col" }, [haCard, sysCard]),
+      el("div", { class: "col" }, [haCard, pwrCard, sysCard]),
       el("div", { class: "col" }, [dspCard, authCard]),
     ]));
+  }
+
+  // Power card: screen brightness, two-stage idle sleep, quiet hours, and the
+  // opt-in battery-to-HA reporting. Posts to /api/config/power.
+  function buildPowerCard() {
+    var pw = state.cfg.power || {};
+    var dsp = state.spec || DEFAULT_SPEC;
+
+    var bright = el("input", { type: "range", min: "1", max: "100", value: pw.brightness || 80 });
+    var brightVal = el("span", { class: "hint", text: (pw.brightness || 80) + "%" });
+    bright.addEventListener("input", function () { brightVal.textContent = bright.value + "%"; });
+
+    var ssEn = el("input", { type: "checkbox" });
+    ssEn.checked = pw.screenSleepEnabled !== false;
+    var ssSec = el("input", { type: "number", min: "5", value: pw.screenSleepSec || 60 });
+
+    var dsEn = el("input", { type: "checkbox" });
+    dsEn.checked = !!pw.deepSleepEnabled;
+    var dsSec = el("input", { type: "number", min: "5", value: pw.deepSleepSec || 600 });
+
+    var qhEn = el("input", { type: "checkbox" });
+    qhEn.checked = !!pw.quietHoursEnabled;
+    var qhStart = el("input", { type: "number", min: "0", max: "23", value: pw.quietStartHour != null ? pw.quietStartHour : 23 });
+    var qhEnd = el("input", { type: "number", min: "0", max: "23", value: pw.quietEndHour != null ? pw.quietEndHour : 7 });
+
+    var rbEn = el("input", { type: "checkbox" });
+    rbEn.checked = !!pw.reportBatteryToHa;
+    var rbEnt = el("input", { type: "text", value: pw.batteryEntity || "sensor.espanelha_battery" });
+
+    // Read-only battery status line (from /api/device).
+    var batText;
+    if (!dsp.hasPmic) batText = "No battery controller detected on this board.";
+    else if (!dsp.batteryPresent) batText = "No battery connected (running on USB power).";
+    else batText = (dsp.batteryPct >= 0 ? dsp.batteryPct + "%" : "—") +
+      (dsp.batteryCharging ? " · charging" : (dsp.onBattery ? " · on battery" : " · external power"));
+
+    var card = el("div", { class: "card" }, [
+      el("h2", { text: "Power" }),
+      el("label", { class: "field" }, [el("span", { text: "Brightness" }), bright, brightVal]),
+      el("label", { class: "switch" }, [ssEn, el("span", { text: "Turn the screen off when idle" })]),
+      field("Screen off after (seconds)", ssSec),
+      el("label", { class: "switch" }, [dsEn, el("span", { text: "Deep sleep when idle (battery only)" })]),
+      field("Deep sleep after (seconds)", dsSec),
+      el("label", { class: "switch" }, [qhEn, el("span", { text: "Quiet hours (blank the screen at night)" })]),
+      field("Quiet start (hour 0–23)", qhStart),
+      field("Quiet end (hour 0–23)", qhEnd),
+      el("hr", {}),
+      el("p", { class: "hint", text: "Battery: " + batText }),
+      el("label", { class: "switch" }, [rbEn, el("span", { text: "Report battery level to Home Assistant" })]),
+      field("Battery entity id", rbEnt),
+    ]);
+
+    var save = el("button", { class: "btn", text: "Save power" });
+    save.addEventListener("click", function () {
+      var body = {
+        brightness: clamp(parseInt(bright.value, 10) || 80, 1, 100),
+        screenSleepEnabled: ssEn.checked,
+        screenSleepSec: Math.max(5, parseInt(ssSec.value, 10) || 60),
+        deepSleepEnabled: dsEn.checked,
+        deepSleepSec: Math.max(5, parseInt(dsSec.value, 10) || 600),
+        quietHoursEnabled: qhEn.checked,
+        quietStartHour: clamp(parseInt(qhStart.value, 10) || 0, 0, 23),
+        quietEndHour: clamp(parseInt(qhEnd.value, 10) || 0, 0, 23),
+        reportBatteryToHa: rbEn.checked,
+        batteryEntity: rbEnt.value.trim() || "sensor.espanelha_battery",
+      };
+      postJSON("/api/config/power", body)
+        .then(function () { toast("Power saved"); return refreshConfig(); })
+        .catch(function (e) { toast("Save failed: " + e.message, true); });
+    });
+    card.appendChild(el("div", { class: "actions" }, [save]));
+    return card;
   }
 
   function field(labelText, inputEl) {

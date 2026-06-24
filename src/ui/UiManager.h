@@ -22,6 +22,10 @@ struct Actions {
     std::function<void(const String &entityId, int pct)> onBrightness;
     std::function<void()> onCycleRotation;        // settings: rotate 90°
     std::function<void(bool enabled)> onToggleAutoRotate;  // settings: IMU toggle
+    std::function<void(int pct)> onSetBrightness;         // settings: brightness slider released (persist)
+    std::function<void(int pct)> onPreviewBrightness;     // settings: brightness slider dragging (live, no save)
+    std::function<void(bool enabled)> onToggleScreenSleep;  // settings: screen-sleep toggle
+    std::function<void(bool enabled)> onToggleDeepSleep;    // settings: deep-sleep toggle
 };
 
 void uiInit();
@@ -59,6 +63,22 @@ void uiSetConnectionStatus(const String &text);
 
 /** Update the WiFi-to-AP indicator on the settings menu (signal from RSSI). */
 void uiSetWifiStatus(bool connected, int rssi);
+
+/** Update the battery indicator (top-left of the title bars). The icon is hidden
+ *  when there's no battery, or when running on external/USB power and not
+ *  charging; the WiFi indicator shifts to make room when it's shown. */
+void uiSetBatteryStatus(bool present, bool onBattery, int percent, bool charging);
+
+/** Reflect the active brightness on the on-screen slider (1..100). */
+void uiSetBrightness(int percent);
+
+/** Sync the on-screen power controls (brightness slider + sleep toggles) from
+ *  the stored config. Call at boot and after a power-settings change. */
+void uiSetPowerConfig(const core::PowerConfig &power);
+
+/** Tell the UI the screen was just woken by a touch, so the tap that woke it is
+ *  swallowed (it must not toggle the tile underneath). */
+void uiNotifyWake();
 
 /** Remember the config-portal URL shown on the settings screen. */
 void uiSetPortalUrl(const String &url);

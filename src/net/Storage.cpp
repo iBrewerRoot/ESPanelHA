@@ -105,6 +105,17 @@ void loadConfig(core::AppConfig &out) {
     out.display.autoRotate = prefs.getBool("disp_auto", false);
     out.display.colsPortrait = prefs.getUChar("disp_colsp", 2);
     out.display.colsLandscape = prefs.getUChar("disp_colsl", 3);
+
+    out.power.brightness = prefs.getUChar("pwr_bright", 80);
+    out.power.screenSleepEnabled = prefs.getBool("pwr_ssen", true);
+    out.power.screenSleepSec = prefs.getUShort("pwr_sssec", 60);
+    out.power.deepSleepEnabled = prefs.getBool("pwr_dsen", false);
+    out.power.deepSleepSec = prefs.getUShort("pwr_dssec", 600);
+    out.power.quietHoursEnabled = prefs.getBool("pwr_qhen", false);
+    out.power.quietStartHour = prefs.getUChar("pwr_qhst", 23);
+    out.power.quietEndHour = prefs.getUChar("pwr_qhend", 7);
+    out.power.reportBatteryToHa = prefs.getBool("pwr_batha", false);
+    if (prefs.isKey("pwr_batent")) out.power.batteryEntity = prefs.getString("pwr_batent");
     prefs.end();
 
     if (LittleFS.exists(kLayoutPath)) {
@@ -169,6 +180,21 @@ void saveDisplayConfig(const core::DisplayConfig &display) {
     prefs.putBool("disp_auto", display.autoRotate);
     prefs.putUChar("disp_colsp", display.colsPortrait);
     prefs.putUChar("disp_colsl", display.colsLandscape);
+    prefs.end();
+}
+
+void savePowerConfig(const core::PowerConfig &power) {
+    prefs.begin(kNvsNamespace, false);
+    prefs.putUChar("pwr_bright", power.brightness);
+    prefs.putBool("pwr_ssen", power.screenSleepEnabled);
+    prefs.putUShort("pwr_sssec", power.screenSleepSec);
+    prefs.putBool("pwr_dsen", power.deepSleepEnabled);
+    prefs.putUShort("pwr_dssec", power.deepSleepSec);
+    prefs.putBool("pwr_qhen", power.quietHoursEnabled);
+    prefs.putUChar("pwr_qhst", power.quietStartHour);
+    prefs.putUChar("pwr_qhend", power.quietEndHour);
+    prefs.putBool("pwr_batha", power.reportBatteryToHa);
+    prefs.putString("pwr_batent", power.batteryEntity);
     prefs.end();
 }
 

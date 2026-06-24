@@ -11,6 +11,7 @@
 
 LV_FONT_DECLARE(mdi_font);
 LV_FONT_DECLARE(mdi_font_lg);  /* larger subset for on-screen settings tiles */
+LV_FONT_DECLARE(mdi_font_sm);  /* smaller subset for the status-bar battery icon */
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,6 +57,17 @@ const char *mdiGlyph(const char *name);
 #define MDI_SIGNAL_CELLULAR_OUTLINE "\xF3\xB0\xA2\xBF" /* mdi:signal-cellular-outline U+F08BF */
 #define MDI_ROTATE_RIGHT "\xF3\xB0\x91\xA7" /* mdi:rotate-right U+F0467 */
 #define MDI_SCREEN_ROTATION "\xF3\xB0\x91\xB5" /* mdi:screen-rotation U+F0475 */
+#define MDI_BRIGHTNESS_6 "\xF3\xB0\x83\x9F" /* mdi:brightness-6 U+F00DF */
+#define MDI_POWER_SLEEP "\xF3\xB0\xA4\x84" /* mdi:power-sleep U+F0904 */
+#define MDI_SLEEP "\xF3\xB0\x92\xB2" /* mdi:sleep U+F04B2 */
+#define MDI_BATTERY "\xF3\xB0\x81\xB9" /* mdi:battery U+F0079 */
+#define MDI_BATTERY_OUTLINE "\xF3\xB0\x82\x8E" /* mdi:battery-outline U+F008E */
+#define MDI_BATTERY_CHARGING "\xF3\xB0\x82\x84" /* mdi:battery-charging U+F0084 */
+#define MDI_BATTERY_ALERT "\xF3\xB0\x82\x83" /* mdi:battery-alert U+F0083 */
+#define MDI_BATTERY_20 "\xF3\xB0\x81\xBB" /* mdi:battery-20 U+F007B */
+#define MDI_BATTERY_40 "\xF3\xB0\x81\xBD" /* mdi:battery-40 U+F007D */
+#define MDI_BATTERY_60 "\xF3\xB0\x81\xBF" /* mdi:battery-60 U+F007F */
+#define MDI_BATTERY_80 "\xF3\xB0\x82\x81" /* mdi:battery-80 U+F0081 */
 #define MDI_HELP_CIRCLE_OUTLINE "\xF3\xB0\x98\xA5" /* mdi:help-circle-outline U+F0625 */
 #define MDI_ALERT_CIRCLE_OUTLINE "\xF3\xB0\x97\x96" /* mdi:alert-circle-outline U+F05D6 */
 
